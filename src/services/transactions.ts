@@ -5,9 +5,9 @@ export type transaction_type = "expense" | "income";
 export interface add_transaction_input {
   amount: number;
   transaction_type: transaction_type;
-  account?: string; // e.g. "Cash"
-  category?: string; // e.g. "Food"
-  date?: string; // ISO date "2025-12-04"
+  account?: string;
+  category?: string | undefined;
+  date?: string | undefined;
 }
 
 export interface add_transaction_result {
@@ -42,6 +42,20 @@ export async function add_transaction(
       return {
         success: false,
         error: "Transaction type must be 'expense' or 'income'.",
+      };
+    }
+    if (
+      input.account !== "checkings" &&
+      input.account !== "savings" &&
+      input.account !== "freedom unlimited" &&
+      input.account !== "brokerage" &&
+      input.account !== "roth ira" &&
+      input.account !== "spaxx"
+    ) {
+      return {
+        success: false,
+        error:
+          "Account must be one of: checkings, savings, freedom unlimited, brokerage, roth ira, spaxx.",
       };
     }
 
@@ -100,7 +114,7 @@ export async function add_transaction(
     return {
       success: true,
       transactionId: response.id,
-      message: `added ${input.transaction_type} of $${input.amount} to ${account} (category: ${category}).`,
+      message: `added ${input.transaction_type} (category: ${category}).`,
     };
   } catch (err: any) {
     console.error("Error adding transaction to Notion:", err);

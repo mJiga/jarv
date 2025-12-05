@@ -5,15 +5,18 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "ts-node-dev --respawn src/test_add_transaction.ts"
+    "dev": "ts-node-dev --respawn src/test_add_transaction.ts",
+    "server": "ts-node-dev --respawn src/server.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.24.3",
     "@notionhq/client": "^5.4.0",
-    "dotenv": "^17.2.3"
+    "dotenv": "^17.2.3",
+    "zod": "^4.1.13"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

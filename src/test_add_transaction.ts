@@ -5,7 +5,7 @@ async function main() {
     amount: 4,
     transaction_type: "income",
     account: "freedom unlimited",
-    category: "Food",
+    category: "food",
     // date: "2025-12-04" // optional; if omitted, uses today
   });
 
