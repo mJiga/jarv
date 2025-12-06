@@ -1,5 +1,7 @@
 // src/server.ts
+import express, { Request, Response } from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { add_transaction, transaction_type } from "./services/transactions";
@@ -46,6 +48,11 @@ server.registerTool(
     inputSchema: add_transaction_schema,
   },
   async (args) => {
+    console.log(
+      "[MCP] add_transaction called",
+      new Date().toISOString(),
+      JSON.stringify(args)
+    );
     const parsed = add_transaction_schema.parse(args);
 
     // Map to your existing add_transaction() signature
@@ -80,6 +87,51 @@ server.registerTool(
   }
 );
 
-// For now, export the server so you can hook it to a transport later
-const transport = new StdioServerTransport();
-server.connect(transport);
+// ---- StdioServerTransport ----
+// const transport = new StdioServerTransport();
+// server.connect(transport);
+
+// ---- StreamableHTTP transport ----
+const PORT = Number(process.env.PORT ?? 3000);
+
+async function main() {
+  const app = express();
+  app.use(express.json());
+
+  // Stateless HTTP MCP transport
+  const transport = new StreamableHTTPServerTransport({
+    // `undefined` = stateless server; each request is independent
+    sessionIdGenerator: undefined,
+  });
+
+  // Connect the MCP server to the transport
+  await server.connect(transport);
+
+  // Single HTTP endpoint for MCP
+  app.post("/mcp", async (req: Request, res: Response) => {
+    try {
+      await transport.handleRequest(req, res, req.body);
+    } catch (err) {
+      console.error("Error handling MCP request:", err);
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: "2.0",
+          error: {
+            code: -32603,
+            message: "Internal server error",
+          },
+          id: req.body?.id ?? null,
+        });
+      }
+    }
+  });
+
+  app.listen(PORT, () => {
+    console.log(`MCP server listening on http://localhost:${PORT}/mcp`);
+  });
+}
+
+main().catch((err) => {
+  console.error("Error starting MCP server:", err);
+  process.exit(1);
+});
