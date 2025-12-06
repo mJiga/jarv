@@ -1,7 +1,8 @@
 // src/server.ts
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { add_transaction } from "./services/transactions";
+import { add_transaction, transaction_type } from "./services/transactions";
 
 const server = new McpServer({
   name: "jarvis",
@@ -10,18 +11,30 @@ const server = new McpServer({
 
 // Define the input schema for the tool
 const add_transaction_schema = z.object({
-  amount: z.number(),
-  transaction_type: z.enum(["expense", "income"]), // "expense" means negative, "income" means positive
-  account: z.enum([
-    "checkings",
-    "savings",
-    "freedom unlimited",
-    "brokerage",
-    "roth ira",
-    "spaxx",
-  ]),
-  category: z.string().optional(), // fallback to "other" in handler
-  date: z.string().optional(), // ISO date, fallback to today in handler
+  amount: z
+    .number()
+    .describe("The amount of the transaction, positive number."),
+  transaction_type: z
+    .enum(["expense", "income"] as [transaction_type, transaction_type])
+    .describe('"expense" for money going out, "income" for money coming in.'), // "expense" means negative, "income" means positive
+  account: z
+    .enum([
+      "checkings",
+      "savings",
+      "freedom unlimited",
+      "brokerage",
+      "roth ira",
+      "spaxx",
+    ])
+    .describe("account to add the transaction to."),
+  category: z
+    .string()
+    .optional()
+    .describe('category of the transaction. Fallback to "other"'),
+  date: z
+    .string()
+    .optional()
+    .describe("ISO date, fallback to today in handler"),
 });
 
 // Register the tool with the MCP server
@@ -68,4 +81,5 @@ server.registerTool(
 );
 
 // For now, export the server so you can hook it to a transport later
-export default server;
+const transport = new StdioServerTransport();
+server.connect(transport);

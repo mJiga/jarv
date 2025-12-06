@@ -6,7 +6,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "ts-node-dev --respawn src/test_add_transaction.ts",
-    "server": "ts-node-dev --respawn src/server.ts"
+    "mcp": "ts-node-dev --respawn src/server.ts"
   },
   "keywords": [],
   "author": "",
