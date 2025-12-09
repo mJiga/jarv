@@ -73,8 +73,8 @@ server.registerTool(
         transactionId: result.transactionId,
         amount: parsed.amount,
         transaction_type: parsed.transaction_type,
-        account: parsed.account ?? "Other",
-        category: parsed.category ?? "Other",
+        account: parsed.account ?? "other",
+        category: parsed.category ?? "other",
       },
       content: [
         {

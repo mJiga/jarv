@@ -1,16 +1,21 @@
+// src/notion_client.ts
 import "dotenv/config";
 import { Client } from "@notionhq/client";
 
-const apiKey = process.env.NOTION_API_KEY;
-const transactionsDbId = process.env.TRANSACTIONS_DB_ID;
-
-if (!apiKey) {
-  throw new Error("NOTION_API_KEY is not set in .env");
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`${name} is not set in .env`);
+  }
+  return value;
 }
 
-if (!transactionsDbId) {
-  throw new Error("TRANSACTIONS_DB_ID is not set in .env");
-}
+const apiKey = requireEnv("NOTION_API_KEY");
 
 export const notion = new Client({ auth: apiKey });
-export const TRANSACTIONS_DB_ID = transactionsDbId;
+
+// Separate DBs
+export const EXPENSES_DB_ID = requireEnv("EXPENSES_DB_ID");
+export const INCOME_DB_ID = requireEnv("INCOME_DB_ID");
+export const ACCOUNTS_DB_ID = requireEnv("ACCOUNTS_DB_ID");
+export const CATEGORIES_DB_ID = requireEnv("CATEGORIES_DB_ID");
