@@ -46,11 +46,11 @@ JSON schema:
 {
   "action": "add_transaction",
   "args": {
-    "amount": number,                 // positive
+    "amount": number,
     "transaction_type": "expense" | "income",
     "account": string,                // one of: "checkings", "savings", "freedom unlimited", "brokerage", "roth ira", "spaxx"
     "category": string,               // optional, short label like "food", "transport"
-    "date": "YYYY-MM-DD"              // optional, if user says "yesterday", you convert it to a date; otherwise omit
+    "date": "YYYY-MM-DD"              // optional, the date the request was made
   }
 }
 
@@ -65,9 +65,67 @@ Rules:
 - Respond with JSON ONLY. No code fences, no Markdown, no explanations.
 - If the message is clearly about adding a transaction, pick "add_transaction".
 - Default category to "other" if not specified.
-- Default date to today if not specified.
+- Default date to "today" if not specified.
 
 User message:
 ${userMessage}
 `;
+}
+
+function extractJson(text: string): any {
+  // Sometimes models wrap JSON in ```...```
+  const trimmed = text.trim();
+
+  const codeFenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const jsonText = codeFenceMatch ? codeFenceMatch[1] : trimmed;
+
+  if (!jsonText) {
+    throw new Error("Invalid JSON: input is undefined");
+  }
+  return JSON.parse(jsonText);
+}
+
+export async function inferAction(userMessage: string): Promise<ParsedAction> {
+  const prompt = buildPrompt(userMessage);
+
+  const result = await model.generateContent({
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+  });
+
+  const text = result.response.text();
+
+  try {
+    const parsed = extractJson(text);
+
+    if (parsed.action === "add_transaction" && parsed.args) {
+      const a = parsed.args;
+      if (
+        typeof a.amount === "number" &&
+        (a.transaction_type === "expense" || "income") &&
+        typeof a.account === "string"
+      ) {
+        return {
+          action: "add_transaction",
+          args: {
+            amount: a.amount,
+            transaction_type: a.transaction_type,
+            account: a.account,
+            category: a.category,
+            date: a.date,
+          },
+        };
+      }
+    }
+
+    return {
+      action: "unknown",
+      reason: "Parsed JSON did not match expected schema.",
+    };
+  } catch (err: any) {
+    console.error("[Gemini] Failed to parse JSON:", err);
+    return {
+      action: "unknown",
+      reason: "Failed to parse model output as JSON.",
+    };
+  }
 }
