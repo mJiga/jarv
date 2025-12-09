@@ -4,15 +4,16 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "ts-node-dev --respawn src/test_add_transaction.ts",
-    "mcp": "ts-node-dev --respawn src/server.ts"
+    "dev": "ts-node-dev --respawn src/mcp/test_add_transaction.ts",
+    "mcp": "ts-node-dev --respawn src/mcp/server.ts",
+    "agent": "ts-node-dev --respawn src/agent/agent_server.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "@modelcontextprotocol/sdk": "^1.24.3",
     "@notionhq/client": "^5.4.0",
     "dotenv": "^17.2.3",
