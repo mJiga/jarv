@@ -1,20 +1,34 @@
 // src/services/transactions.ts
+import { notion, EXPENSES_DB_ID, INCOME_DB_ID } from "../notion/client";
+
 import {
-  notion,
-  EXPENSES_DB_ID,
-  INCOME_DB_ID,
-  ACCOUNTS_DB_ID,
-  CATEGORIES_DB_ID,
-} from "../notion_client";
+  find_account_page_by_title,
+  ensure_category_page,
+} from "../notion/utils";
 
 export type transaction_type = "expense" | "income";
 
-export interface add_transaction_input {
+/**
+ * This describes the fields that live on an income row in the notion income DB.
+ */
+export interface income_db_fields {
+  amount: number; // net amount hitting this account
+  account: string; // account title (e.g., "checkings")
+  date: string; // ISO "YYYY-MM-DD"
+  pre_breakdown?: number; // total gross paycheck / original amount
+  budget?: number; // fraction (0–1) of gross going into this row
+}
+
+/**
+ * Input payload for add_transaction.
+ * For incomes, this overlaps with income_db_fields; for expenses, some
+ * properties (pre_breakdown, budget) are unused.
+ */
+export interface add_transaction_input extends Partial<income_db_fields> {
   amount: number;
   transaction_type: transaction_type;
-  account?: string;
   category?: string | undefined;
-  date?: string | undefined;
+  memo?: string | undefined; // optional label (e.g., rule_name for income splits)
 }
 
 export interface add_transaction_result {
@@ -25,95 +39,22 @@ export interface add_transaction_result {
 }
 
 function build_title(input: add_transaction_input): string {
-  const isExpense = input.transaction_type === "expense";
-  const transaction_type = isExpense ? "expense" : "income";
+  const is_expense = input.transaction_type === "expense";
+  const transaction_type = is_expense ? "expense" : "income";
   const amount_str = `$${input.amount}`;
   const acc = input.account || "cash";
 
-  if (isExpense) {
+  if (is_expense) {
     const cat = input.category || "other";
     return `${transaction_type} ${amount_str} ${cat} (${acc})`;
   } else {
+    // For income, use memo (e.g., rule_name) if provided
+    if (input.memo) {
+      return `${input.memo} ${amount_str} (${acc})`;
+    }
     return `${transaction_type} ${amount_str} (${acc})`;
   }
 }
-
-// --- Notion helpers ---
-
-async function getDataSourceIdForDatabase(databaseId: string): Promise<string> {
-  const db: any = await notion.databases.retrieve({ database_id: databaseId });
-  const ds = db.data_sources?.[0];
-  if (!ds) {
-    throw new Error(
-      `No data source attached to database ${databaseId}. Check Notion setup.`
-    );
-  }
-  return ds.id;
-}
-
-async function find_account_page_by_title(
-  title: string
-): Promise<string | null> {
-  const dataSourceId = await getDataSourceIdForDatabase(ACCOUNTS_DB_ID);
-
-  const res = await (notion as any).dataSources.query({
-    data_source_id: dataSourceId,
-    filter: {
-      // if your first column in Accounts is literally called "title" (Aa icon),
-      // this is correct. If it's "Name", change to property: "Name".
-      property: "title",
-      title: { equals: title },
-    },
-    page_size: 1,
-  });
-
-  const first = res.results[0];
-  if (!first) return null;
-  return first.id;
-}
-
-async function find_category_page_by_title(
-  title: string
-): Promise<string | null> {
-  const dataSourceId = await getDataSourceIdForDatabase(CATEGORIES_DB_ID);
-
-  const res = await (notion as any).dataSources.query({
-    data_source_id: dataSourceId,
-    filter: {
-      // matches your screenshot: first column is literally "title"
-      property: "title",
-      title: { equals: title },
-    },
-    page_size: 1,
-  });
-
-  const first = res.results[0];
-  if (!first) return null;
-  return first.id;
-}
-
-async function ensure_category_page(title: string): Promise<string> {
-  const existing_id = await find_category_page_by_title(title);
-  if (existing_id) return existing_id;
-
-  // Auto-create new category page, using the real title property
-  const created = await notion.pages.create({
-    parent: { database_id: CATEGORIES_DB_ID },
-    properties: {
-      title: {
-        title: [
-          {
-            text: { content: title },
-          },
-        ],
-      },
-    },
-  });
-
-  return created.id;
-}
-
-// --- tool ---
 
 export async function add_transaction(
   input: add_transaction_input
@@ -121,7 +62,7 @@ export async function add_transaction(
   try {
     // validation
     if (typeof input.amount !== "number" || input.amount <= 0) {
-      return { success: false, error: "Amount must be a positive number." };
+      return { success: false, error: "amount must be a positive number." };
     }
 
     if (
@@ -130,7 +71,7 @@ export async function add_transaction(
     ) {
       return {
         success: false,
-        error: "Transaction type must be 'expense' or 'income'.",
+        error: "transaction_type must be 'expense' or 'income'.",
       };
     }
 
@@ -140,7 +81,7 @@ export async function add_transaction(
     // allowed accounts guard
     const allowed_accounts = [
       "checkings",
-      "savings",
+      "short term savings",
       "freedom unlimited",
       "brokerage",
       "roth ira",
@@ -160,22 +101,26 @@ export async function add_transaction(
     if (!account_page_id) {
       return {
         success: false,
-        error: `Account page '${account_name}' not found in Notion Accounts DB.`,
+        error: `account page '${account_name}' not found in Notion Accounts DB.`,
       };
     }
 
-    const category_page_id = await ensure_category_page(category_name);
+    const category_page_id =
+      input.transaction_type === "expense"
+        ? await ensure_category_page(category_name)
+        : null;
 
     // default to today if missing
     const today = new Date();
-    const isoDate = input.date || today.toISOString().slice(0, 10); // "YYYY-MM-DD"
+    const iso_date = input.date || today.toISOString().slice(0, 10); // "YYYY-MM-DD"
 
     const title = build_title({
       amount: input.amount,
       transaction_type: input.transaction_type,
       account: account_name,
       category: category_name,
-      date: isoDate,
+      date: iso_date,
+      memo: input.memo,
     });
 
     let response;
@@ -194,7 +139,7 @@ export async function add_transaction(
           },
           date: {
             date: {
-              start: isoDate,
+              start: iso_date,
             },
           },
           amount: {
@@ -204,16 +149,18 @@ export async function add_transaction(
             relation: [{ id: account_page_id }],
           },
           categories: {
-            relation: [{ id: category_page_id }],
+            relation: [{ id: category_page_id! }],
           },
         },
       });
     } else {
       // --- INCOME DB ---
-      // For now, we treat amount as the net amount hitting the account.
-      // pre_breakdown = gross; budget = fraction of gross that actually goes in.
-      const pre_breakdown = input.amount; // later we can let this differ
-      const budget = 1; // 100% for now
+      // If split_paycheck passes pre_breakdown/budget, use those; otherwise default.
+      const pre_breakdown =
+        typeof input.pre_breakdown === "number"
+          ? input.pre_breakdown
+          : input.amount;
+      const budget = typeof input.budget === "number" ? input.budget : 1;
 
       response = await notion.pages.create({
         parent: { database_id: INCOME_DB_ID },
@@ -227,7 +174,7 @@ export async function add_transaction(
           },
           date: {
             date: {
-              start: isoDate,
+              start: iso_date,
             },
           },
           amount: {
@@ -246,12 +193,12 @@ export async function add_transaction(
       });
     }
 
-    const baseMsg = `added ${input.transaction_type} of $${input.amount} to ${account_name}`;
+    const base_msg = `added ${input.transaction_type} of $${input.amount} to ${account_name}`;
 
     const message =
       input.transaction_type === "expense"
-        ? `${baseMsg} (category: ${category_name}).`
-        : `${baseMsg}.`;
+        ? `${base_msg} (category: ${category_name}).`
+        : `${base_msg}.`;
 
     return {
       success: true,
