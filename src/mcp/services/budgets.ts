@@ -209,8 +209,8 @@ export async function split_paycheck(
         account: account_title,
         date,
         pre_breakdown: gross_amount,
-        budget: percentage,
-        memo: rule_name,
+        percentage: percentage,
+        budget: rule_name,
       };
 
       const tx_result: add_transaction_result = await add_transaction(tx_input);
@@ -220,7 +220,6 @@ export async function split_paycheck(
         account: account_title,
         date,
         pre_breakdown: gross_amount,
-        budget: percentage,
         percentage,
         portion,
         transaction_id: tx_result.transactionId,

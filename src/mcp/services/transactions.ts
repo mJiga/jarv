@@ -4,20 +4,11 @@ import { notion, EXPENSES_DB_ID, INCOME_DB_ID } from "../notion/client";
 import {
   find_account_page_by_title,
   ensure_category_page,
+  transaction_type,
+  income_db_fields,
 } from "../notion/utils";
 
-export type transaction_type = "expense" | "income";
-
-/**
- * This describes the fields that live on an income row in the notion income DB.
- */
-export interface income_db_fields {
-  amount: number; // net amount hitting this account
-  account: string; // account title (e.g., "checkings")
-  date: string; // ISO "YYYY-MM-DD"
-  pre_breakdown?: number; // total gross paycheck / original amount
-  budget?: number; // fraction (0–1) of gross going into this row
-}
+export type { transaction_type, income_db_fields };
 
 /**
  * Input payload for add_transaction.
@@ -28,7 +19,6 @@ export interface add_transaction_input extends Partial<income_db_fields> {
   amount: number;
   transaction_type: transaction_type;
   category?: string | undefined;
-  memo?: string | undefined; // optional label (e.g., rule_name for income splits)
 }
 
 export interface add_transaction_result {
@@ -48,9 +38,9 @@ function build_title(input: add_transaction_input): string {
     const cat = input.category || "other";
     return `${transaction_type} ${amount_str} ${cat} (${acc})`;
   } else {
-    // For income, use memo (e.g., rule_name) if provided
-    if (input.memo) {
-      return `${input.memo} ${amount_str} (${acc})`;
+    // For income, use budget (e.g., rule_name) if provided
+    if (input.budget) {
+      return `${input.budget} ${amount_str} (${acc})`;
     }
     return `${transaction_type} ${amount_str} (${acc})`;
   }
@@ -120,7 +110,7 @@ export async function add_transaction(
       account: account_name,
       category: category_name,
       date: iso_date,
-      memo: input.memo,
+      budget: input.budget,
     });
 
     let response;
@@ -155,12 +145,13 @@ export async function add_transaction(
       });
     } else {
       // --- INCOME DB ---
-      // If split_paycheck passes pre_breakdown/budget, use those; otherwise default.
+      // If split_paycheck passes pre_breakdown/percentage, use those; otherwise default.
       const pre_breakdown =
         typeof input.pre_breakdown === "number"
           ? input.pre_breakdown
           : input.amount;
-      const budget = typeof input.budget === "number" ? input.budget : 1;
+      const percentage =
+        typeof input.percentage === "number" ? input.percentage : 1;
 
       response = await notion.pages.create({
         parent: { database_id: INCOME_DB_ID },
@@ -183,8 +174,8 @@ export async function add_transaction(
           pre_breakdown: {
             number: pre_breakdown,
           },
-          budget: {
-            number: budget,
+          percentage: {
+            number: percentage,
           },
           accounts: {
             relation: [{ id: account_page_id }],

@@ -107,3 +107,22 @@ export function get_page_title_text(page: any): string {
   if (!Array.isArray(title) || title.length === 0) return "";
   return title[0]?.plain_text ?? "";
 }
+
+/* ──────────────────────────────
+ * Shared Types
+ * ────────────────────────────── */
+
+export type transaction_type = "expense" | "income";
+
+/**
+ * Fields that live on an income row in the Notion Income DB.
+ * Shared by transactions and budgets modules.
+ */
+export interface income_db_fields {
+  amount: number; // net amount hitting this account
+  account: string; // account title (e.g., "checkings")
+  date: string; // ISO "YYYY-MM-DD"
+  pre_breakdown?: number | undefined; // total gross paycheck / original amount
+  percentage?: number | undefined; // fraction (0–1) of gross going into this row
+  budget?: string | undefined; // label for the budget rule (e.g., rule_name)
+}
