@@ -120,8 +120,8 @@ export type transaction_type = "expense" | "income";
  */
 export interface income_db_fields {
   amount: number; // net amount hitting this account
-  account: string; // account title (e.g., "checkings")
-  date: string; // ISO "YYYY-MM-DD"
+  account?: string | undefined; // account title (e.g., "checkings")
+  date?: string | undefined; // ISO "YYYY-MM-DD"
   pre_breakdown?: number | undefined; // total gross paycheck / original amount
   percentage?: number | undefined; // fraction (0–1) of gross going into this row
   budget?: string | undefined; // label for the budget rule (e.g., rule_name)

@@ -19,7 +19,7 @@ export interface budget_allocation {
 }
 
 export interface set_budget_rule_input {
-  rule_name: string;
+  budget_name: string;
   budgets: budget_allocation[];
 }
 
@@ -37,7 +37,7 @@ export async function set_budget_rule(
   input: set_budget_rule_input
 ): Promise<set_budget_rule_result> {
   try {
-    const { rule_name, budgets } = input;
+    const { budget_name, budgets } = input;
 
     if (!budgets || budgets.length === 0) {
       return {
@@ -50,7 +50,7 @@ export async function set_budget_rule(
     if (Math.abs(sum - 1) > 0.001) {
       return {
         success: false,
-        error: `percentages must sum to 1.0 (±0.001). current sum: ${sum}`,
+        error: `percentages must sum to 1.0. current sum: ${sum}`,
       };
     }
 
@@ -66,7 +66,7 @@ export async function set_budget_rule(
     }
 
     // Archive existing pages for this rule
-    const existing = await find_budget_rule_pages_by_title(rule_name);
+    const existing = await find_budget_rule_pages_by_title(budget_name);
     for (const page of existing) {
       await notion.pages.update({
         page_id: page.id,
@@ -88,7 +88,7 @@ export async function set_budget_rule(
           title: {
             title: [
               {
-                text: { content: rule_name },
+                text: { content: budget_name },
               },
             ],
           },
@@ -104,7 +104,7 @@ export async function set_budget_rule(
 
     return {
       success: true,
-      message: `set budget rule '${rule_name}' with ${budgets.length} allocations.`,
+      message: `set budget rule '${budget_name}' with ${budgets.length} allocations.`,
     };
   } catch (err: any) {
     console.error("error setting budget rule:", err);
@@ -121,9 +121,9 @@ export async function set_budget_rule(
 
 export interface split_paycheck_input {
   gross_amount: number;
-  rule_name?: string; // default 'default'
-  date?: string; // ISO 'YYYY-MM-DD'
-  description?: string; // optional memo text
+  rule_name?: string | undefined; // default 'default'
+  date?: string | undefined; // ISO 'YYYY-MM-DD'
+  description?: string | undefined; // optional memo text
 }
 
 /**
@@ -209,7 +209,6 @@ export async function split_paycheck(
         account: account_title,
         date,
         pre_breakdown: gross_amount,
-        percentage: percentage,
         budget: rule_name,
       };
 

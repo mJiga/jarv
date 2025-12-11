@@ -1,4 +1,7 @@
-import { add_transaction } from "./services/transactions";
+import {
+  add_transaction,
+  add_transactions_batch,
+} from "./services/transactions";
 import { set_budget_rule, split_paycheck } from "./services/budgets";
 
 async function main() {
@@ -21,11 +24,29 @@ async function main() {
   //   ],
   // });
 
-  const result = await split_paycheck({
-    gross_amount: 3000,
-    rule_name: "msft",
-    // date: "2025-12-04" // optional; if omitted, uses today
+  // const result = await split_paycheck({
+  //   gross_amount: 3000,
+  //   rule_name: "msft",
+  //   // date: "2025-12-04" // optional; if omitted, uses today
+  // });
+
+  const result = await add_transactions_batch({
+    transactions: [
+      {
+        amount: 15,
+        transaction_type: "expense",
+        account: "checkings",
+        category: "food",
+      },
+      {
+        amount: 2000,
+        transaction_type: "income",
+        account: "checkings",
+        category: "income",
+      },
+    ],
   });
+
   console.log(result);
 }
 

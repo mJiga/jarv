@@ -1,8 +1,13 @@
 // src/agent/agentServer.ts
 import "dotenv/config";
 import express, { Request, Response } from "express";
-import { inferAction } from "./llm/gemini_client";
-import { callAddTransactionTool } from "./mcp_client";
+import { infer_action } from "./llm/gemini_client";
+import {
+  call_add_transaction_batch_tool,
+  call_add_transaction_tool,
+  call_set_budget_rule_tool,
+  call_split_paycheck_tool,
+} from "./mcp_client";
 
 const PORT = Number(process.env.AGENT_PORT ?? 4000);
 
@@ -20,26 +25,39 @@ app.post("/chat", async (req: Request, res: Response) => {
     console.log("[Agent] User message:", message);
 
     // 1) Ask Gemini what to do
-    const action = await inferAction(message);
+    const action = await infer_action(message);
     console.log("[Agent] Parsed action:", action);
 
     if (action.action === "unknown") {
       return res.json({
-        reply:
-          "I couldn't confidently map that to a transaction command. " +
-          "Try something like: 'Add 14 dollars for tacos from checkings.'",
+        reply: "I couldn't confidently map that to a transaction command. ",
         meta: action,
       });
     }
 
-    // 2) Call MCP tool if it's an add_transaction
-    const mcpResult = await callAddTransactionTool(action.args);
+    // 2) Call the appropriate MCP tool
+    let mcp_result;
+
+    if (action.action === "add_transaction") {
+      mcp_result = await call_add_transaction_tool(action.args);
+    } else if (action.action === "add_transaction_batch") {
+      mcp_result = await call_add_transaction_batch_tool(action.args);
+    } else if (action.action === "set_budget_rule") {
+      mcp_result = await call_set_budget_rule_tool(action.args);
+    } else if (action.action === "split_paycheck") {
+      mcp_result = await call_split_paycheck_tool(action.args);
+    } else {
+      return res.json({
+        reply: "Unhandled action type.",
+        meta: action,
+      });
+    }
 
     return res.json({
-      reply: mcpResult.message,
+      reply: mcp_result.message,
       meta: {
         action,
-        mcp: mcpResult.raw,
+        mcp: mcp_result.raw,
       },
     });
   } catch (err: any) {

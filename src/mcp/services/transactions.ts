@@ -4,6 +4,7 @@ import { notion, EXPENSES_DB_ID, INCOME_DB_ID } from "../notion/client";
 import {
   find_account_page_by_title,
   ensure_category_page,
+  find_budget_rule_pages_by_title,
   transaction_type,
   income_db_fields,
 } from "../notion/utils";
@@ -18,6 +19,8 @@ export type { transaction_type, income_db_fields };
 export interface add_transaction_input extends Partial<income_db_fields> {
   amount: number;
   transaction_type: transaction_type;
+  account?: string | undefined;
+  date?: string | undefined;
   category?: string | undefined;
 }
 
@@ -28,11 +31,28 @@ export interface add_transaction_result {
   error?: string;
 }
 
+export interface add_transactions_batch_input {
+  transactions: add_transaction_input[];
+}
+
+export interface add_transactions_batch_item_result {
+  index: number;
+  success: boolean;
+  transaction_id?: string | undefined;
+  message?: string | undefined;
+  error?: string | undefined;
+}
+
+export interface add_transactions_batch_result {
+  success: boolean;
+  results: add_transactions_batch_item_result[];
+}
+
 function build_title(input: add_transaction_input): string {
   const is_expense = input.transaction_type === "expense";
   const transaction_type = is_expense ? "expense" : "income";
   const amount_str = `$${input.amount}`;
-  const acc = input.account || "cash";
+  const acc = input.account;
 
   if (is_expense) {
     const cat = input.category || "other";
@@ -44,6 +64,56 @@ function build_title(input: add_transaction_input): string {
     }
     return `${transaction_type} ${amount_str} (${acc})`;
   }
+}
+
+/**
+ * Add multiple transactions in one call.
+ * Each element is passed to add_transaction and its result is collected.
+ */
+export async function add_transactions_batch(
+  input: add_transactions_batch_input
+): Promise<add_transactions_batch_result> {
+  const results: add_transactions_batch_item_result[] = [];
+
+  const txs = input.transactions || [];
+
+  for (let i = 0; i < txs.length; i++) {
+    const tx = txs[i];
+
+    // Guard against undefined (satisfies TypeScript)
+    if (!tx) {
+      results.push({
+        index: i,
+        success: false,
+        error: "transaction entry is undefined.",
+      });
+      continue;
+    }
+
+    try {
+      const res: add_transaction_result = await add_transaction(tx);
+
+      results.push({
+        index: i,
+        success: res.success,
+        transaction_id: res.transactionId,
+        message: res.message,
+        error: res.error,
+      });
+    } catch (err: any) {
+      console.error("error in add_transactions_batch item:", err);
+      results.push({
+        index: i,
+        success: false,
+        error: err?.message || "unknown error while adding transaction.",
+      });
+    }
+  }
+
+  return {
+    success: true,
+    results,
+  };
 }
 
 export async function add_transaction(
@@ -65,7 +135,10 @@ export async function add_transaction(
       };
     }
 
-    const account_name = input.account || "freedom unlimited";
+    // Default account: freedom unlimited for expenses, checkings for income
+    const default_account =
+      input.transaction_type === "expense" ? "freedom unlimited" : "checkings";
+    const account_name = input.account || default_account;
     const category_name = input.category || "other";
 
     // allowed accounts guard
@@ -145,13 +218,32 @@ export async function add_transaction(
       });
     } else {
       // --- INCOME DB ---
-      // If split_paycheck passes pre_breakdown/percentage, use those; otherwise default.
+      // Look up the budget page by name (default to "default")
+      const budget_name = input.budget || "default";
+      const budget_pages = await find_budget_rule_pages_by_title(budget_name);
+
+      // Find the budget page that matches this account
+      let budget_page_id: string | null = null;
+      for (const page of budget_pages) {
+        const relation = page.properties?.account?.relation?.[0];
+        if (relation?.id === account_page_id) {
+          budget_page_id = page.id;
+          break;
+        }
+      }
+
+      if (!budget_page_id) {
+        return {
+          success: false,
+          error: `No budget rule '${budget_name}' found for account '${account_name}'.`,
+        };
+      }
+
+      // pre_breakdown defaults to amount if not provided (for single income, not split)
       const pre_breakdown =
         typeof input.pre_breakdown === "number"
           ? input.pre_breakdown
           : input.amount;
-      const percentage =
-        typeof input.percentage === "number" ? input.percentage : 1;
 
       response = await notion.pages.create({
         parent: { database_id: INCOME_DB_ID },
@@ -174,8 +266,9 @@ export async function add_transaction(
           pre_breakdown: {
             number: pre_breakdown,
           },
-          percentage: {
-            number: percentage,
+          // budget is a relation, percentage is a rollup (auto-calculated)
+          budget: {
+            relation: [{ id: budget_page_id }],
           },
           accounts: {
             relation: [{ id: account_page_id }],
