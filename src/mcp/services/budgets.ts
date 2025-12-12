@@ -121,7 +121,7 @@ export async function set_budget_rule(
 
 export interface split_paycheck_input {
   gross_amount: number;
-  rule_name?: string | undefined; // default 'default'
+  budget_name?: string | undefined; // default 'default'
   date?: string | undefined; // ISO 'YYYY-MM-DD'
   description?: string | undefined; // optional memo text
 }
@@ -141,7 +141,7 @@ export type split_paycheck_result =
   | {
       success: true;
       gross_amount: number;
-      rule_name: string;
+      budget_name: string;
       entries: split_paycheck_entry[];
     }
   | {
@@ -165,15 +165,15 @@ export async function split_paycheck(
       };
     }
 
-    const rule_name = input.rule_name || "default";
+    const budget_name = input.budget_name || "default";
     const today = new Date().toISOString().slice(0, 10);
     const date = input.date || today;
 
-    const rule_pages = await find_budget_rule_pages_by_title(rule_name);
+    const rule_pages = await find_budget_rule_pages_by_title(budget_name);
     if (!rule_pages || rule_pages.length === 0) {
       return {
         success: false,
-        error: `no budget rule found with name '${rule_name}'.`,
+        error: `no budget rule found with name '${budget_name}'.`,
       };
     }
 
@@ -199,7 +199,7 @@ export async function split_paycheck(
       const portion = Number(portion_raw.toFixed(2));
 
       const memo_parts = [
-        `paycheck split (${rule_name})`,
+        `paycheck split (${budget_name})`,
         input.description,
       ].filter(Boolean);
 
@@ -209,7 +209,7 @@ export async function split_paycheck(
         account: account_title,
         date,
         pre_breakdown: gross_amount,
-        budget: rule_name,
+        budget: budget_name,
       };
 
       const tx_result: add_transaction_result = await add_transaction(tx_input);
@@ -229,7 +229,7 @@ export async function split_paycheck(
     return {
       success: true,
       gross_amount,
-      rule_name,
+      budget_name,
       entries,
     };
   } catch (err: any) {

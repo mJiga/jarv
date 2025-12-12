@@ -246,7 +246,7 @@ const split_paycheck_schema = z.object({
     .number()
     .positive()
     .describe("Total paycheck amount before splitting."),
-  rule_name: z
+  budget_name: z
     .string()
     .optional()
     .describe('Budget rule to use (default: "default").'),
@@ -278,7 +278,7 @@ server.registerTool(
 
     const result = await split_paycheck({
       gross_amount: parsed.gross_amount,
-      rule_name: parsed.rule_name,
+      budget_name: parsed.budget_name,
       date: parsed.date,
       description: parsed.description,
     });
@@ -302,13 +302,13 @@ server.registerTool(
     return {
       structuredContent: {
         gross_amount: result.gross_amount,
-        rule_name: result.rule_name,
+        budget_name: result.budget_name,
         entries: result.entries,
       },
       content: [
         {
           type: "text",
-          text: `Split $${result.gross_amount} paycheck using '${result.rule_name}' rule: ${entries_summary}`,
+          text: `Split $${result.gross_amount} paycheck using '${result.budget_name}' rule: ${entries_summary}`,
         },
       ],
     };

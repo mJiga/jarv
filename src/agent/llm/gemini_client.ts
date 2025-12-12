@@ -59,7 +59,7 @@ export type parsed_action =
       action: "split_paycheck";
       args: {
         gross_amount: number;
-        rule_name?: string;
+        budget_name?: string;
         date?: string;
         description?: string;
       };
@@ -78,8 +78,11 @@ You can ONLY choose between these actions:
 - "add_transaction": when the user clearly wants to add a SINGLE expense or income.
 - "add_transaction_batch": when the user clearly wants to add MULTIPLE transactions at once.
 - "set_budget_rule": ONLY when the user wants to CREATE or UPDATE budget allocation percentages (e.g., "set my budget to 50% checkings, 30% savings").
-- "split_paycheck": when the user mentions "split", "paycheck", "got paid", or wants to DISTRIBUTE money across accounts using an existing budget rule.
-
+- "split_paycheck": when the user mentions getting paid from a source. Patterns include:
+  * "<budget_name> paid <amount>" (e.g., "hunt paid 440", "msft paid 1200")
+  * "got <amount> from <budget_name>" (e.g., "got 500 from hunt")
+  * "split my <amount> paycheck with <budget_name>"
+  * "<budget_name> <amount>" when <budget_name> is a known employer/income source (e.g., "msft 1500", "hunt 440")
 JSON schema:
 
 {
@@ -132,7 +135,7 @@ OR:
   "action": "split_paycheck",
   "args": {
     "gross_amount": number,         // total paycheck amount before splitting
-    "rule_name": string,            // optional, budget rule to use (default: "default")
+    "budget_name": string,          // the budget rule name - extract from phrases like "hunt paid X" → budget_name: "hunt"
     "date": "YYYY-MM-DD",           // optional, OMIT if not specified
     "description": string           // optional, memo/note for the paycheck
   }
@@ -140,7 +143,8 @@ OR:
 
 Rules:
 - Respond with JSON ONLY. No code fences, no Markdown, no explanations.
-- If the message is clearly about adding a transaction, pick "add_transaction".
+- IMPORTANT: If message matches "<name> paid <amount>" or "<name> <amount>", use "split_paycheck" with budget_name = <name>.
+- If the message is clearly about adding a single expense or income (not a paycheck), pick "add_transaction".
 - If the message mentions "investments" assume accounts "brokerage" and "roth ira".
 - Default category to "other" if not specified.
 - If no account is specified by the user, OMIT the account field entirely. Do NOT guess or default to any account.
@@ -252,8 +256,8 @@ export async function infer_action(
           action: "split_paycheck",
           args: {
             gross_amount: a.gross_amount,
-            rule_name:
-              typeof a.rule_name === "string" ? a.rule_name : undefined,
+            budget_name:
+              typeof a.budget_name === "string" ? a.budget_name : undefined,
             date: is_valid_date ? a.date : undefined,
             description:
               typeof a.description === "string" ? a.description : undefined,

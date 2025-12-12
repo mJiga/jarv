@@ -35,7 +35,7 @@ export interface set_budget_rule_args {
 
 export interface split_paycheck_args {
   gross_amount: number;
-  rule_name?: string;
+  budget_name?: string;
   date?: string;
   description?: string;
 }
