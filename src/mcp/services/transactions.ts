@@ -22,6 +22,7 @@ export interface add_transaction_input extends Partial<income_db_fields> {
   account?: string | undefined;
   date?: string | undefined;
   category?: string | undefined;
+  note?: string | undefined;
 }
 
 export interface add_transaction_result {
@@ -135,17 +136,36 @@ export async function add_transaction(
       };
     }
 
-    // Default account: freedom unlimited for expenses, checkings for income
+    // Default account: sapphire for expenses, checkings for income
     const default_account =
-      input.transaction_type === "expense" ? "freedom unlimited" : "checkings";
+      input.transaction_type === "expense" ? "sapphire" : "checkings";
     const account_name = input.account || default_account;
-    const category_name = input.category || "other";
+
+    // allowed categories - default to "other" if not in list
+    const allowed_categories = [
+      "out",
+      "food",
+      "att",
+      "chatgpt",
+      "lyft",
+      "shopping",
+      "health",
+      "car",
+      "house",
+      "other",
+    ] as const;
+
+    const category_name = allowed_categories.includes(input.category as any)
+      ? input.category!
+      : "other";
 
     // allowed accounts guard
     const allowed_accounts = [
       "checkings",
       "short term savings",
+      "bills",
       "freedom unlimited",
+      "sapphire",
       "brokerage",
       "roth ira",
       "spaxx",
@@ -155,7 +175,7 @@ export async function add_transaction(
       return {
         success: false,
         error:
-          "account must be one of: checkings, savings, freedom unlimited, brokerage, roth ira, spaxx.",
+          "account must be one of: checkings, short term savings, bills, freedom unlimited, sapphire, brokerage, roth ira, spaxx.",
       };
     }
 
@@ -190,31 +210,43 @@ export async function add_transaction(
 
     if (input.transaction_type === "expense") {
       // --- EXPENSES DB ---
-      response = await notion.pages.create({
-        parent: { database_id: EXPENSES_DB_ID },
-        properties: {
-          title: {
-            title: [
-              {
-                text: { content: title },
-              },
-            ],
-          },
-          date: {
-            date: {
-              start: iso_date,
+      const properties: any = {
+        title: {
+          title: [
+            {
+              text: { content: title },
             },
-          },
-          amount: {
-            number: input.amount,
-          },
-          accounts: {
-            relation: [{ id: account_page_id }],
-          },
-          categories: {
-            relation: [{ id: category_page_id! }],
+          ],
+        },
+        date: {
+          date: {
+            start: iso_date,
           },
         },
+        amount: {
+          number: input.amount,
+        },
+        accounts: {
+          relation: [{ id: account_page_id }],
+        },
+        categories: {
+          relation: [{ id: category_page_id! }],
+        },
+      };
+
+      if (input.note) {
+        properties.note = {
+          rich_text: [
+            {
+              text: { content: input.note },
+            },
+          ],
+        };
+      }
+
+      response = await notion.pages.create({
+        parent: { database_id: EXPENSES_DB_ID },
+        properties,
       });
     } else {
       // --- INCOME DB ---

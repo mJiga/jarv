@@ -7,6 +7,7 @@ import {
   call_add_transaction_tool,
   call_set_budget_rule_tool,
   call_split_paycheck_tool,
+  call_update_last_expense_category_tool,
 } from "./mcp_client";
 
 const PORT = Number(process.env.AGENT_PORT ?? 4000);
@@ -46,6 +47,8 @@ app.post("/chat", async (req: Request, res: Response) => {
       mcp_result = await call_set_budget_rule_tool(action.args);
     } else if (action.action === "split_paycheck") {
       mcp_result = await call_split_paycheck_tool(action.args);
+    } else if (action.action === "update_last_expense_category") {
+      mcp_result = await call_update_last_expense_category_tool(action.args);
     } else {
       return res.json({
         reply: "Unhandled action type.",

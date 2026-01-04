@@ -19,12 +19,15 @@ export type parsed_action =
         account?:
           | "checkings"
           | "short term savings"
+          | "bills"
           | "freedom unlimited"
+          | "sapphire"
           | "brokerage"
           | "roth ira"
           | "spaxx";
         category?: string;
         date?: string;
+        note?: string;
       };
     }
   | {
@@ -36,12 +39,15 @@ export type parsed_action =
           account?:
             | "checkings"
             | "short term savings"
+            | "bills"
             | "freedom unlimited"
+            | "sapphire"
             | "brokerage"
             | "roth ira"
             | "spaxx";
           category?: string;
           date?: string;
+          note?: string;
         }>;
       };
     }
@@ -65,6 +71,12 @@ export type parsed_action =
       };
     }
   | {
+      action: "update_last_expense_category";
+      args: {
+        category: string;
+      };
+    }
+  | {
       action: "unknown";
       reason?: string;
     };
@@ -83,6 +95,7 @@ You can ONLY choose between these actions:
   * "got <amount> from <budget_name>" (e.g., "got 500 from hunt")
   * "split my <amount> paycheck with <budget_name>"
   * "<budget_name> <amount>" when <budget_name> is a known employer/income source (e.g., "msft 1500", "hunt 440")
+- "update_last_expense_category": when the user wants to change/fix the category of the last added expense (e.g., "actually that was food", "change it to shopping").
 JSON schema:
 
 {
@@ -90,9 +103,10 @@ JSON schema:
   "args": {
     "amount": number,
     "transaction_type": "expense" | "income",
-    "account": string,                // optional, one of: "checkings", "short term savings" (if user says "savings" map to "short term savings"), "freedom unlimited", "brokerage", "roth ira", "spaxx". OMIT if not specified.
-    "category": string,               // optional, short label like "food", "transport"
-    "date": "YYYY-MM-DD"              // optional, the date the request was made
+    "account": string,                // optional, one of: "checkings", "short term savings" (if user says "savings" map to "short term savings"), "bills", "freedom unlimited", "sapphire", "brokerage", "roth ira", "spaxx". OMIT if not specified.
+    "category": string,               // one of: "out" (eating out/restaurants), "food" (groceries), "att" (phone bill), "chatgpt" (AI subscriptions), "lyft" (rideshare/transport), "shopping", "health", "car", "house", "other". INFER from context - only use "other" if truly unclear.
+    "date": "YYYY-MM-DD",             // optional, the date the request was made
+    "note": string                    // optional, extra context like "Starbucks with Ana", "oil change at Jiffy Lube". Include if user provides details beyond category.
   }
 }
 
@@ -107,7 +121,8 @@ OR:
         "transaction_type": "expense" | "income",
         "account": string,          // optional, OMIT if not specified
         "category": string,         // optional
-        "date": "YYYY-MM-DD"        // optional, OMIT if not specified
+        "date": "YYYY-MM-DD",       // optional, OMIT if not specified
+        "note": string              // optional, extra context
       }
     ]
   }
@@ -122,7 +137,7 @@ OR:
     "budget_name": string,            // name of the budget rule (e.g., "default", "paycheck")
     "budgets": [                    // list of budget allocations, percentages MUST sum to 1.0
       {
-        "account": string,          // one of: "checkings", "short term savings" (if user says "savings" map to "short term savings"), "freedom unlimited", "brokerage", "roth ira", "spaxx"
+        "account": string,          // one of: "checkings", "short term savings", "bills", "freedom unlimited", "sapphire", "brokerage", "roth ira", "spaxx"
         "percentage": number        // fraction 0–1 (e.g., 0.5 for 50%)
       }
     ]
@@ -141,12 +156,21 @@ OR:
   }
 }
 
+OR:
+
+{
+  "action": "update_last_expense_category",
+  "args": {
+    "category": string          // new category (e.g., "food", "out", "lyft")
+  }
+}
+
 Rules:
 - Respond with JSON ONLY. No code fences, no Markdown, no explanations.
 - IMPORTANT: If message matches "<name> paid <amount>" or "<name> <amount>", use "split_paycheck" with budget_name = <name>.
 - If the message is clearly about adding a single expense or income (not a paycheck), pick "add_transaction".
 - If the message mentions "investments" assume accounts "brokerage" and "roth ira".
-- Default category to "other" if not specified.
+- INFER the category from context: "lunch", "dinner", "restaurant" → "out"; "groceries", "supermarket" → "food"; "uber", "lyft", "taxi" → "lyft"; "amazon", "clothes" → "shopping"; etc. Only use "other" if the category is truly unclear.
 - If no account is specified by the user, OMIT the account field entirely. Do NOT guess or default to any account.
 - If no date is specified, OMIT the date field entirely (do not use "today" or any placeholder).
 
@@ -200,6 +224,7 @@ export async function infer_action(
             account: typeof a.account === "string" ? a.account : undefined,
             category: a.category,
             date: is_valid_date ? a.date : undefined,
+            note: typeof a.note === "string" ? a.note : undefined,
           },
         };
       }
@@ -217,6 +242,7 @@ export async function infer_action(
             account: typeof t.account === "string" ? t.account : undefined,
             category: t.category,
             date: is_valid_date ? t.date : undefined,
+            note: typeof t.note === "string" ? t.note : undefined,
           };
         });
 
@@ -261,6 +287,18 @@ export async function infer_action(
             date: is_valid_date ? a.date : undefined,
             description:
               typeof a.description === "string" ? a.description : undefined,
+          },
+        };
+      }
+    }
+
+    if (parsed.action === "update_last_expense_category" && parsed.args) {
+      const a = parsed.args;
+      if (typeof a.category === "string" && a.category.length > 0) {
+        return {
+          action: "update_last_expense_category",
+          args: {
+            category: a.category,
           },
         };
       }

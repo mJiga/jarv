@@ -13,12 +13,15 @@ export interface add_transaction_args {
   account?:
     | "checkings"
     | "short term savings"
+    | "bills"
     | "freedom unlimited"
+    | "sapphire"
     | "brokerage"
     | "roth ira"
     | "spaxx";
   category?: string;
   date?: string;
+  note?: string;
 }
 
 export interface add_transaction_batch_args {
@@ -136,5 +139,19 @@ export async function call_split_paycheck_tool(args: split_paycheck_args) {
     "split_paycheck",
     args,
     "Paycheck split, but no detailed message."
+  );
+}
+
+export interface update_last_expense_category_args {
+  category: string;
+}
+
+export async function call_update_last_expense_category_tool(
+  args: update_last_expense_category_args
+) {
+  return call_mcp_tool(
+    "update_last_expense_category",
+    args,
+    "Category updated, but no detailed message."
   );
 }

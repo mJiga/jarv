@@ -13,6 +13,7 @@ import {
   transaction_type,
 } from "./services/transactions";
 import { set_budget_rule, split_paycheck } from "./services/budgets";
+import { update_last_expense_category } from "./services/categories";
 
 const server = new McpServer({
   name: "jarvis",
@@ -40,7 +41,9 @@ const add_transaction_schema = z.object({
     .enum([
       "checkings",
       "short term savings",
+      "bills",
       "freedom unlimited",
+      "sapphire",
       "brokerage",
       "roth ira",
       "spaxx",
@@ -55,8 +58,14 @@ const add_transaction_schema = z.object({
     .string()
     .optional()
     .describe("ISO date (YYYY-MM-DD). Fallback to today in handler."),
+  note: z
+    .string()
+    .optional()
+    .describe(
+      "Optional note/memo for the expense (e.g., 'Starbucks with Ana')."
+    ),
   // You *can* expose these if you want to manually attach to a budget rule,
-  // but they’re mainly used by split_paycheck / internal flows.
+  // but they're mainly used by split_paycheck / internal flows.
   pre_breakdown: z
     .number()
     .optional()
@@ -309,6 +318,57 @@ server.registerTool(
         {
           type: "text",
           text: `Split $${result.gross_amount} paycheck using '${result.budget_name}' rule: ${entries_summary}`,
+        },
+      ],
+    };
+  }
+);
+
+/* ──────────────────────────────
+ * update_last_expense_category tool
+ * ────────────────────────────── */
+
+const update_last_expense_category_schema = z.object({
+  category: z
+    .string()
+    .describe("New category name (e.g., 'food', 'out', 'car')."),
+});
+
+server.registerTool(
+  "update_last_expense_category",
+  {
+    title: "update last expense category",
+    description:
+      "Update the category of the most recently added expense. Useful to fix the category right after adding an expense.",
+    inputSchema: update_last_expense_category_schema,
+  },
+  async (args) => {
+    console.log(
+      "[MCP] update_last_expense_category called",
+      new Date().toISOString(),
+      JSON.stringify(args)
+    );
+
+    const parsed = update_last_expense_category_schema.parse(args);
+    const result = await update_last_expense_category(parsed);
+
+    if (!result.success) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Failed to update last expense: ${result.error}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `Updated last expense to category "${result.category}"`,
         },
       ],
     };
