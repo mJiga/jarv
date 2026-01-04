@@ -95,7 +95,7 @@ You can ONLY choose between these actions:
   * "got <amount> from <budget_name>" (e.g., "got 500 from hunt")
   * "split my <amount> paycheck with <budget_name>"
   * "<budget_name> <amount>" when <budget_name> is a known employer/income source (e.g., "msft 1500", "hunt 440")
-- "update_last_expense_category": when the user wants to change/fix the category of the last added expense (e.g., "actually that was food", "change it to shopping").
+- "update_last_expense_category": when the user wants to change/fix the category of the last added expense (e.g., "actually that was groceries", "change it to shopping").
 JSON schema:
 
 {
@@ -104,9 +104,9 @@ JSON schema:
     "amount": number,
     "transaction_type": "expense" | "income",
     "account": string,                // optional, one of: "checkings", "short term savings" (if user says "savings" map to "short term savings"), "bills", "freedom unlimited", "sapphire", "brokerage", "roth ira", "spaxx". OMIT if not specified.
-    "category": string,               // one of: "out" (eating out/restaurants), "food" (groceries), "att" (phone bill), "chatgpt" (AI subscriptions), "lyft" (rideshare/transport), "shopping", "health", "car", "house", "other". INFER from context - only use "other" if truly unclear.
+    "category": string,               // one of: "out" (eating out/restaurants), "groceries", "att" (phone bill), "chatgpt" (AI subscriptions), "lyft" (rideshare/transport), "shopping", "health", "car", "house", "other". INFER from context - only use "other" if truly unclear.
     "date": "YYYY-MM-DD",             // optional, the date the request was made
-    "note": string                    // optional, extra context like "Starbucks with Ana", "oil change at Jiffy Lube". Include if user provides details beyond category.
+    "note": string                    // optional but IMPORTANT: capture the FULL original description from the user. E.g., "$15 coffee with Ana" → note: "coffee with Ana". "$30 oil change at Jiffy Lube" → note: "oil change at Jiffy Lube". Include vendor names, people, or any context.
   }
 }
 
@@ -161,7 +161,7 @@ OR:
 {
   "action": "update_last_expense_category",
   "args": {
-    "category": string          // new category (e.g., "food", "out", "lyft")
+    "category": string          // new category (e.g., "groceries", "out", "lyft")
   }
 }
 
@@ -170,7 +170,8 @@ Rules:
 - IMPORTANT: If message matches "<name> paid <amount>" or "<name> <amount>", use "split_paycheck" with budget_name = <name>.
 - If the message is clearly about adding a single expense or income (not a paycheck), pick "add_transaction".
 - If the message mentions "investments" assume accounts "brokerage" and "roth ira".
-- INFER the category from context: "lunch", "dinner", "restaurant" → "out"; "groceries", "supermarket" → "food"; "uber", "lyft", "taxi" → "lyft"; "amazon", "clothes" → "shopping"; etc. Only use "other" if the category is truly unclear.
+- INFER the category from context: "lunch", "dinner", "restaurant" → "out"; "groceries", "supermarket", "trader joes", "costco" → "groceries"; "uber", "lyft", "taxi" → "lyft"; "amazon", "clothes" → "shopping"; etc. Only use "other" if the category is truly unclear.
+- ALWAYS extract the note: capture the descriptive part of the user's message (vendor, person, item). E.g., "15 starbucks with ana" → note: "starbucks with ana", category: "out".
 - If no account is specified by the user, OMIT the account field entirely. Do NOT guess or default to any account.
 - If no date is specified, OMIT the date field entirely (do not use "today" or any placeholder).
 

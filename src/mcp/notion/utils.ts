@@ -56,7 +56,7 @@ export async function find_account_page_by_title(
 }
 
 /**
- * Categories DB: resolve category page by title ("out", "food", ...).
+ * Categories DB: resolve category page by title ("out", "groceries", ...).
  */
 export async function find_category_page_by_title(
   title: string

@@ -144,7 +144,7 @@ export async function add_transaction(
     // allowed categories - default to "other" if not in list
     const allowed_categories = [
       "out",
-      "food",
+      "groceries",
       "att",
       "chatgpt",
       "lyft",

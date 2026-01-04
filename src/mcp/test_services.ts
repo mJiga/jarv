@@ -36,7 +36,7 @@ async function main() {
         amount: 15,
         transaction_type: "expense",
         account: "checkings",
-        category: "food",
+        category: "groceries",
       },
       {
         amount: 2000,

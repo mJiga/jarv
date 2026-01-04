@@ -331,7 +331,7 @@ server.registerTool(
 const update_last_expense_category_schema = z.object({
   category: z
     .string()
-    .describe("New category name (e.g., 'food', 'out', 'car')."),
+    .describe("New category name (e.g., 'groceries', 'out', 'car')."),
 });
 
 server.registerTool(

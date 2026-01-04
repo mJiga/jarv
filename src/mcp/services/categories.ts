@@ -6,7 +6,7 @@ import {
 } from "../notion/utils";
 
 export interface update_last_expense_category_input {
-  category: string; // e.g. "food", "out", "subscriptions"
+  category: string; // e.g. "groceries", "out", "subscriptions"
 }
 
 export interface update_last_expense_category_result {
