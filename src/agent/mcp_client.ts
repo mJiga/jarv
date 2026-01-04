@@ -155,3 +155,26 @@ export async function call_update_last_expense_category_tool(
     "Category updated, but no detailed message."
   );
 }
+
+export async function call_get_uncategorized_expenses_tool() {
+  return call_mcp_tool(
+    "get_uncategorized_expenses",
+    {},
+    "Retrieved uncategorized expenses."
+  );
+}
+
+export interface update_expense_category_args {
+  expense_id: string;
+  category: string;
+}
+
+export async function call_update_expense_category_tool(
+  args: update_expense_category_args
+) {
+  return call_mcp_tool(
+    "update_expense_category",
+    args,
+    "Expense category updated."
+  );
+}

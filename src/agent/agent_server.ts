@@ -8,7 +8,9 @@ import {
   call_set_budget_rule_tool,
   call_split_paycheck_tool,
   call_update_last_expense_category_tool,
+  call_update_expense_category_tool,
 } from "./mcp_client";
+import { run_inbox_cleanup } from "./flows/inbox_cleanup";
 
 const PORT = Number(process.env.AGENT_PORT ?? 4000);
 
@@ -49,6 +51,22 @@ app.post("/chat", async (req: Request, res: Response) => {
       mcp_result = await call_split_paycheck_tool(action.args);
     } else if (action.action === "update_last_expense_category") {
       mcp_result = await call_update_last_expense_category_tool(action.args);
+    } else if (action.action === "get_uncategorized_expenses") {
+      const result = await run_inbox_cleanup();
+      return res.json({
+        reply: result.message,
+        meta: { action, ...result },
+      });
+    } else if (action.action === "update_expense_category_batch") {
+      const updates: string[] = [];
+      for (const update of action.args.updates) {
+        await call_update_expense_category_tool(update);
+        updates.push(`${update.expense_id} → ${update.category}`);
+      }
+      return res.json({
+        reply: `Updated ${updates.length} expense(s).`,
+        meta: { action, updates },
+      });
     } else {
       return res.json({
         reply: "Unhandled action type.",

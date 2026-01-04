@@ -13,7 +13,11 @@ import {
   transaction_type,
 } from "./services/transactions";
 import { set_budget_rule, split_paycheck } from "./services/budgets";
-import { update_last_expense_category } from "./services/categories";
+import {
+  update_last_expense_category,
+  get_uncategorized_expenses,
+  update_expense_category,
+} from "./services/categories";
 
 const server = new McpServer({
   name: "jarvis",
@@ -369,6 +373,117 @@ server.registerTool(
         {
           type: "text" as const,
           text: `Updated last expense to category "${result.category}"`,
+        },
+      ],
+    };
+  }
+);
+
+/* ──────────────────────────────
+ * get_uncategorized_expenses tool
+ * ────────────────────────────── */
+
+server.registerTool(
+  "get_uncategorized_expenses",
+  {
+    title: "get uncategorized expenses",
+    description:
+      'Returns all expenses with category "other" (the inbox). Returns id, amount, note, and date for each.',
+    inputSchema: z.object({}),
+  },
+  async () => {
+    console.log(
+      "[MCP] get_uncategorized_expenses called",
+      new Date().toISOString()
+    );
+
+    const result = await get_uncategorized_expenses();
+
+    if (!result.success) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Failed to get uncategorized expenses: ${result.error}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const expenses = result.expenses || [];
+    if (expenses.length === 0) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "No uncategorized expenses found. Inbox is clean!",
+          },
+        ],
+      };
+    }
+
+    return {
+      structuredContent: { expenses },
+      content: [
+        {
+          type: "text" as const,
+          text: `Found ${expenses.length} uncategorized expense(s):\n${expenses
+            .map((e) => `- $${e.amount} "${e.note}" (${e.date}) [${e.id}]`)
+            .join("\n")}`,
+        },
+      ],
+    };
+  }
+);
+
+/* ──────────────────────────────
+ * update_expense_category tool
+ * ────────────────────────────── */
+
+const update_expense_category_schema = z.object({
+  expense_id: z
+    .string()
+    .describe("The Notion page ID of the expense to update."),
+  category: z
+    .string()
+    .describe("New category name (e.g., 'groceries', 'out', 'car')."),
+});
+
+server.registerTool(
+  "update_expense_category",
+  {
+    title: "update expense category",
+    description: "Update the category of a specific expense by its ID.",
+    inputSchema: update_expense_category_schema,
+  },
+  async (args) => {
+    console.log(
+      "[MCP] update_expense_category called",
+      new Date().toISOString(),
+      JSON.stringify(args)
+    );
+
+    const parsed = update_expense_category_schema.parse(args);
+    const result = await update_expense_category(parsed);
+
+    if (!result.success) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Failed to update expense: ${result.error}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `Updated expense to category "${result.category}"`,
         },
       ],
     };

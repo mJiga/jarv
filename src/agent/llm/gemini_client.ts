@@ -77,6 +77,19 @@ export type parsed_action =
       };
     }
   | {
+      action: "get_uncategorized_expenses";
+      args: Record<string, never>;
+    }
+  | {
+      action: "update_expense_category_batch";
+      args: {
+        updates: Array<{
+          expense_id: string;
+          category: string;
+        }>;
+      };
+    }
+  | {
       action: "unknown";
       reason?: string;
     };
@@ -96,6 +109,8 @@ You can ONLY choose between these actions:
   * "split my <amount> paycheck with <budget_name>"
   * "<budget_name> <amount>" when <budget_name> is a known employer/income source (e.g., "msft 1500", "hunt 440")
 - "update_last_expense_category": when the user wants to change/fix the category of the last added expense (e.g., "actually that was groceries", "change it to shopping").
+- "get_uncategorized_expenses": when user asks to review/clean up the inbox, see what's in "other", or sort uncategorized expenses.
+- "update_expense_category_batch": when given a list of expenses with IDs to categorize. INFER the best category for each based on its note.
 JSON schema:
 
 {
@@ -162,6 +177,25 @@ OR:
   "action": "update_last_expense_category",
   "args": {
     "category": string          // new category (e.g., "groceries", "out", "lyft")
+  }
+}
+
+OR:
+
+{
+  "action": "get_uncategorized_expenses",
+  "args": {}
+}
+
+OR:
+
+{
+  "action": "update_expense_category_batch",
+  "args": {
+    "updates": [
+      { "expense_id": string, "category": string },
+      ...
+    ]
   }
 }
 
@@ -302,6 +336,29 @@ export async function infer_action(
             category: a.category,
           },
         };
+      }
+    }
+
+    if (parsed.action === "get_uncategorized_expenses") {
+      return {
+        action: "get_uncategorized_expenses",
+        args: {},
+      };
+    }
+
+    if (parsed.action === "update_expense_category_batch" && parsed.args) {
+      const a = parsed.args;
+      if (Array.isArray(a.updates) && a.updates.length > 0) {
+        const valid_updates = a.updates.filter(
+          (u: any) =>
+            typeof u.expense_id === "string" && typeof u.category === "string"
+        );
+        if (valid_updates.length > 0) {
+          return {
+            action: "update_expense_category_batch",
+            args: { updates: valid_updates },
+          };
+        }
       }
     }
 
