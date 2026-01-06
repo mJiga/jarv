@@ -134,11 +134,12 @@ You can ONLY choose between these actions:
 - "update_last_expense_category": when the user wants to change/fix the category of the last added expense (e.g., "actually that was groceries", "change it to shopping").
 - "get_uncategorized_expenses": when user asks to review/clean up the inbox, see what's in "other", or sort uncategorized expenses.
 - "update_expense_category_batch": when given a list of expenses with IDs to categorize. INFER the best category for each based on its note.
-- "create_payment": when user wants to pay off a credit card. Patterns:
-  * "pay <amount> to sapphire from checkings"
-  * "paid <amount> on sapphire"
+- "create_payment": ONLY for credit card payments. Must mention a credit card name (sapphire, freedom) OR explicitly say "credit card payment". Patterns:
+  * "pay <amount> to sapphire/freedom"
   * "credit card payment <amount>"
-  * "pay off sapphire <amount>"
+  * "pay off sapphire/freedom <amount>"
+  * "cc payment <amount>"
+  * DO NOT use create_payment for "paid <person> <amount>" - that's a zelle expense (add_transaction with category "zelle").
 JSON schema:
 
 {
@@ -146,7 +147,7 @@ JSON schema:
   "args": {
     "amount": number,
     "transaction_type": "expense" | "income",
-    "account": string,                // optional, one of: "checkings", "short term savings" (if user says "savings" map to "short term savings"), "bills", "freedom unlimited", "sapphire", "brokerage", "roth ira", "spaxx". OMIT if not specified. For Zelle transactions, ALWAYS use "checkings".
+    "account": string,                // one of: "checkings", "short term savings", "bills", "freedom unlimited", "sapphire", "brokerage", "roth ira", "spaxx". Otherwise OMIT if not specified.
     "category": string,               // one of: "out" (eating out/restaurants), "groceries", "att" (phone bill), "chatgpt" (AI subscriptions), "lyft" (rideshare/transport), "shopping", "health", "car", "house", "zelle", "other". INFER from context - only use "other" if truly unclear.
     "date": "YYYY-MM-DD",             // optional. For "yesterday" use YESTERDAY date above. For "today" or no date mentioned, OMIT this field.
     "note": string,                   // optional but IMPORTANT: capture the FULL original description from the user, but EXCLUDE date words like "yesterday". E.g., "$9 coffee yesterday" → note: "coffee". "$15 coffee with Ana" → note: "coffee with Ana".
@@ -250,9 +251,9 @@ Rules:
 - IMPORTANT: If message matches "<name> paid <amount>" or "<name> <amount>", use "split_paycheck" with budget_name = <name>.
 - If the message is clearly about adding a single expense or income (not a paycheck), pick "add_transaction".
 - If the message mentions "investments" assume accounts "brokerage" and "roth ira".
-- INFER the category from context: "lunch", "dinner", "restaurant" → "out"; "groceries", "supermarket", "trader joes", "costco" → "groceries"; "uber", "lyft", "taxi" → "lyft"; "amazon", "clothes" → "shopping"; "zelle" → "zelle"; etc. Only use "other" if the category is truly unclear.
+- INFER the category from context: "lunch", "dinner", "restaurant" → "out"; "groceries", "supermarket", "trader joes", "costco" → "groceries"; "uber", "lyft", "taxi" → "lyft"; "amazon", "clothes" → "shopping"; "zelle" → "zelle"; "paid <person>" or "sent <person>" → "zelle" (these are personal payments, NOT credit card payments). Only use "other" if the category is truly unclear.
 - ALWAYS extract the note: capture the descriptive part of the user's message (vendor, person, item). E.g., "15 starbucks with ana" → note: "starbucks with ana", category: "out".
-- If no account is specified by the user, OMIT the account field entirely. Do NOT guess or default to any account.
+- For zelle/personal payments (category "zelle"), ALWAYS set account to "checkings". For other categories, OMIT account if not specified.
 - If no date is specified, OMIT the date field entirely (do not use "today" or any placeholder).
 
 User message:
