@@ -9,6 +9,7 @@ import {
   call_split_paycheck_tool,
   call_update_last_expense_category_tool,
   call_update_expense_category_tool,
+  call_create_payment_tool,
 } from "./mcp_client";
 import { run_inbox_cleanup } from "./flows/inbox_cleanup";
 
@@ -67,6 +68,8 @@ app.post("/chat", async (req: Request, res: Response) => {
         reply: `Updated ${updates.length} expense(s).`,
         meta: { action, updates },
       });
+    } else if (action.action === "create_payment") {
+      mcp_result = await call_create_payment_tool(action.args);
     } else {
       return res.json({
         reply: "Unhandled action type.",

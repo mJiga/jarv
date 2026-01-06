@@ -100,6 +100,32 @@ export async function find_budget_rule_pages_by_title(
 }
 
 /**
+ * Generic helper: query a data source with custom filter.
+ */
+export async function query_data_source_with_filter(
+  database_id: string,
+  filter: any,
+  sorts?: any[],
+  page_size = 100
+): Promise<any[]> {
+  const data_source_id = await get_data_source_id_for_database(database_id);
+
+  const query_params: any = {
+    data_source_id,
+    filter,
+    page_size,
+  };
+
+  if (sorts && sorts.length > 0) {
+    query_params.sorts = sorts;
+  }
+
+  const res = await (notion as any).dataSources.query(query_params);
+
+  return res.results;
+}
+
+/**
  * Safely get the plain-text title of a page.
  */
 export function get_page_title_text(page: any): string {

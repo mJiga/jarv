@@ -178,3 +178,15 @@ export async function call_update_expense_category_tool(
     "Expense category updated."
   );
 }
+
+export interface create_payment_args {
+  amount: number;
+  from_account?: "checkings" | "bills" | "short term savings";
+  to_account?: "sapphire" | "freedom unlimited";
+  date?: string;
+  note?: string;
+}
+
+export async function call_create_payment_tool(args: create_payment_args) {
+  return call_mcp_tool("create_payment", args, "Payment created.");
+}

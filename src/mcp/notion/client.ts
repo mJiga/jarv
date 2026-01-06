@@ -20,3 +20,4 @@ export const INCOME_DB_ID = requireEnv("INCOME_DB_ID");
 export const ACCOUNTS_DB_ID = requireEnv("ACCOUNTS_DB_ID");
 export const CATEGORIES_DB_ID = requireEnv("CATEGORIES_DB_ID");
 export const BUDGET_RULES_DB_ID = requireEnv("BUDGET_RULES_DB_ID");
+export const PAYMENTS_DB_ID = requireEnv("PAYMENTS_DB_ID");

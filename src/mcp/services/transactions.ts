@@ -23,6 +23,7 @@ export interface add_transaction_input extends Partial<income_db_fields> {
   date?: string | undefined;
   category?: string | undefined;
   note?: string | undefined;
+  funding_account?: string | undefined; // For credit card expenses: which account funds this (checkings, bills)
 }
 
 export interface add_transaction_result {
@@ -152,6 +153,7 @@ export async function add_transaction(
       "health",
       "car",
       "house",
+      "zelle",
       "other",
     ] as const;
 
@@ -192,6 +194,42 @@ export async function add_transaction(
       input.transaction_type === "expense"
         ? await ensure_category_page(category_name)
         : null;
+
+    // Credit card accounts that need funding
+    const credit_card_accounts = ["sapphire", "freedom unlimited"] as const;
+    const is_credit_card = credit_card_accounts.includes(account_name as any);
+
+    // Determine funding account for credit card expenses
+    // Gemini decides the funding_account, we just default to checkings if not specified
+    let funding_account_name: string | null = null;
+    let funding_account_page_id: string | null = null;
+
+    if (input.transaction_type === "expense" && is_credit_card) {
+      funding_account_name = input.funding_account || "checkings";
+
+      // Validate funding account
+      const allowed_funding = [
+        "checkings",
+        "bills",
+        "short term savings",
+      ] as const;
+      if (!allowed_funding.includes(funding_account_name as any)) {
+        return {
+          success: false,
+          error: `funding_account must be one of: checkings, bills, short term savings.`,
+        };
+      }
+
+      funding_account_page_id = await find_account_page_by_title(
+        funding_account_name
+      );
+      if (!funding_account_page_id) {
+        return {
+          success: false,
+          error: `funding account '${funding_account_name}' not found in Notion Accounts DB.`,
+        };
+      }
+    }
 
     // default to today if missing
     const today = new Date();
@@ -241,6 +279,13 @@ export async function add_transaction(
               text: { content: input.note },
             },
           ],
+        };
+      }
+
+      // Add funding_account relation for credit card expenses
+      if (funding_account_page_id) {
+        properties.funding_account = {
+          relation: [{ id: funding_account_page_id }],
         };
       }
 

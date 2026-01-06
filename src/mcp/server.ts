@@ -18,6 +18,7 @@ import {
   get_uncategorized_expenses,
   update_expense_category,
 } from "./services/categories";
+import { create_payment } from "./services/payments";
 
 const server = new McpServer({
   name: "jarvis",
@@ -67,6 +68,12 @@ const add_transaction_schema = z.object({
     .optional()
     .describe(
       "Optional note/memo for the expense (e.g., 'Starbucks with Ana')."
+    ),
+  funding_account: z
+    .enum(["checkings", "bills", "short term savings"])
+    .optional()
+    .describe(
+      "For credit card expenses: which account funds this. Defaults to 'checkings', use 'bills' for recurring bills, use 'short term savings' for planned purchases."
     ),
   // You *can* expose these if you want to manually attach to a budget rule,
   // but they're mainly used by split_paycheck / internal flows.
@@ -486,6 +493,79 @@ server.registerTool(
           text: `Updated expense to category "${result.category}"`,
         },
       ],
+    };
+  }
+);
+
+/* ──────────────────────────────
+ * create_payment tool
+ * ────────────────────────────── */
+
+const create_payment_schema = z.object({
+  amount: z
+    .number()
+    .positive()
+    .describe("The payment amount (e.g., credit card payment)."),
+  from_account: z
+    .enum(["checkings", "bills", "short term savings"])
+    .optional()
+    .describe(
+      "The account the payment is coming from. Defaults to 'checkings'."
+    ),
+  to_account: z
+    .enum(["sapphire", "freedom unlimited"])
+    .optional()
+    .describe("The credit card account being paid. Defaults to 'sapphire'."),
+  date: z
+    .string()
+    .optional()
+    .describe("ISO date (YYYY-MM-DD). Defaults to today."),
+  note: z.string().optional().describe("Optional note for the payment."),
+});
+
+server.registerTool(
+  "create_payment",
+  {
+    title: "create payment",
+    description:
+      "Create a credit card payment and automatically clear matching expenses. The payment will be applied to uncleared expenses (oldest first) from the specified credit card that were funded by the specified account.",
+    inputSchema: create_payment_schema,
+  },
+  async (args) => {
+    console.log(
+      "[MCP] create_payment called",
+      new Date().toISOString(),
+      JSON.stringify(args)
+    );
+
+    const parsed = create_payment_schema.parse(args);
+    const result = await create_payment(parsed);
+
+    if (!result.success) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Failed to create payment: ${result.error}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: result.message || `Payment created successfully.`,
+        },
+      ],
+      structuredContent: {
+        payment_id: result.payment_id,
+        cleared_expenses: result.cleared_expenses,
+        cleared_total: result.cleared_total,
+        remaining_unapplied: result.remaining_unapplied,
+      },
     };
   }
 );

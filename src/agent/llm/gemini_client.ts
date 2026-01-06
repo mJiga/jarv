@@ -28,6 +28,7 @@ export type parsed_action =
         category?: string;
         date?: string;
         note?: string;
+        funding_account?: "checkings" | "bills" | "short term savings";
       };
     }
   | {
@@ -48,6 +49,7 @@ export type parsed_action =
           category?: string;
           date?: string;
           note?: string;
+          funding_account?: "checkings" | "bills" | "short term savings";
         }>;
       };
     }
@@ -90,27 +92,53 @@ export type parsed_action =
       };
     }
   | {
+      action: "create_payment";
+      args: {
+        amount: number;
+        from_account?: "checkings" | "bills" | "short term savings";
+        to_account?: "sapphire" | "freedom unlimited";
+        date?: string;
+        note?: string;
+      };
+    }
+  | {
       action: "unknown";
       reason?: string;
     };
 
 function build_prompt(user_message: string): string {
+  // Get current date for relative date calculations
+  const today = new Date();
+  const today_str = today.toISOString().slice(0, 10); // YYYY-MM-DD
+
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterday_str = yesterday.toISOString().slice(0, 10);
+
   return `
 You are a finance command parser for my personal expense tracker.
 
+CURRENT DATE: ${today_str}
+YESTERDAY: ${yesterday_str}
+
 Your ONLY job is to read the user's message and output STRICT JSON (no extra text).
 You can ONLY choose between these actions:
-- "add_transaction": when the user clearly wants to add a SINGLE expense or income.
+- "add_transaction": when the user clearly wants to add a SINGLE expense or income. This is the DEFAULT for most messages.
 - "add_transaction_batch": when the user clearly wants to add MULTIPLE transactions at once.
 - "set_budget_rule": ONLY when the user wants to CREATE or UPDATE budget allocation percentages (e.g., "set my budget to 50% checkings, 30% savings").
-- "split_paycheck": when the user mentions getting paid from a source. Patterns include:
-  * "<budget_name> paid <amount>" (e.g., "hunt paid 440", "msft paid 1200")
-  * "got <amount> from <budget_name>" (e.g., "got 500 from hunt")
-  * "split my <amount> paycheck with <budget_name>"
-  * "<budget_name> <amount>" when <budget_name> is a known employer/income source (e.g., "msft 1500", "hunt 440")
+- "split_paycheck": ONLY when the user mentions a SPECIFIC EMPLOYER/INCOME SOURCE name. Known budget names: "hunt", "msft", "default". Patterns:
+  * "<employer> paid <amount>" (e.g., "hunt paid 440", "msft paid 1200")
+  * "got <amount> from <employer>" (e.g., "got 500 from hunt")
+  * "<employer> <amount>" ONLY if <employer> is a known budget name above (e.g., "msft 1500", "hunt 440")
+  * DO NOT use split_paycheck for generic phrases like "i got paid", "got paid today" without a specific employer name - use "default" instead.
 - "update_last_expense_category": when the user wants to change/fix the category of the last added expense (e.g., "actually that was groceries", "change it to shopping").
 - "get_uncategorized_expenses": when user asks to review/clean up the inbox, see what's in "other", or sort uncategorized expenses.
 - "update_expense_category_batch": when given a list of expenses with IDs to categorize. INFER the best category for each based on its note.
+- "create_payment": when user wants to pay off a credit card. Patterns:
+  * "pay <amount> to sapphire from checkings"
+  * "paid <amount> on sapphire"
+  * "credit card payment <amount>"
+  * "pay off sapphire <amount>"
 JSON schema:
 
 {
@@ -118,10 +146,14 @@ JSON schema:
   "args": {
     "amount": number,
     "transaction_type": "expense" | "income",
-    "account": string,                // optional, one of: "checkings", "short term savings" (if user says "savings" map to "short term savings"), "bills", "freedom unlimited", "sapphire", "brokerage", "roth ira", "spaxx". OMIT if not specified.
-    "category": string,               // one of: "out" (eating out/restaurants), "groceries", "att" (phone bill), "chatgpt" (AI subscriptions), "lyft" (rideshare/transport), "shopping", "health", "car", "house", "other". INFER from context - only use "other" if truly unclear.
-    "date": "YYYY-MM-DD",             // optional, the date the request was made
-    "note": string                    // optional but IMPORTANT: capture the FULL original description from the user. E.g., "$15 coffee with Ana" → note: "coffee with Ana". "$30 oil change at Jiffy Lube" → note: "oil change at Jiffy Lube". Include vendor names, people, or any context.
+    "account": string,                // optional, one of: "checkings", "short term savings" (if user says "savings" map to "short term savings"), "bills", "freedom unlimited", "sapphire", "brokerage", "roth ira", "spaxx". OMIT if not specified. For Zelle transactions, ALWAYS use "checkings".
+    "category": string,               // one of: "out" (eating out/restaurants), "groceries", "att" (phone bill), "chatgpt" (AI subscriptions), "lyft" (rideshare/transport), "shopping", "health", "car", "house", "zelle", "other". INFER from context - only use "other" if truly unclear.
+    "date": "YYYY-MM-DD",             // optional. For "yesterday" use YESTERDAY date above. For "today" or no date mentioned, OMIT this field.
+    "note": string,                   // optional but IMPORTANT: capture the FULL original description from the user, but EXCLUDE date words like "yesterday". E.g., "$9 coffee yesterday" → note: "coffee". "$15 coffee with Ana" → note: "coffee with Ana".
+    "funding_account": "checkings" | "bills" | "short term savings"  // REQUIRED for expenses. Determines which account funds this expense:
+                                      // - "bills" for: groceries, att, chatgpt, utilities, subscriptions, health, car, house
+                                      // - "checkings" for: out/restaurants, shopping, lyft, zelle
+                                      // - "short term savings" ONLY if user explicitly says to fund from savings
   }
 }
 
@@ -137,7 +169,8 @@ OR:
         "account": string,          // optional, OMIT if not specified
         "category": string,         // optional
         "date": "YYYY-MM-DD",       // optional, OMIT if not specified
-        "note": string              // optional, extra context
+        "note": string,             // optional, extra context
+        "funding_account": "checkings" | "bills" | "short term savings"  // REQUIRED for expenses. Same rules as add_transaction.
       }
     ]
   }
@@ -199,12 +232,25 @@ OR:
   }
 }
 
+OR:
+
+{
+  "action": "create_payment",
+  "args": {
+    "amount": number,               // payment amount
+    "from_account": "checkings" | "bills" | "short term savings",  // optional, where the money comes from. Defaults to "checkings" if not specified.
+    "to_account": "sapphire" | "freedom unlimited",  // the credit card being paid. Defaults to "sapphire" if not specified.
+    "date": "YYYY-MM-DD",           // optional, OMIT if not specified
+    "note": string                  // optional
+  }
+}
+
 Rules:
 - Respond with JSON ONLY. No code fences, no Markdown, no explanations.
 - IMPORTANT: If message matches "<name> paid <amount>" or "<name> <amount>", use "split_paycheck" with budget_name = <name>.
 - If the message is clearly about adding a single expense or income (not a paycheck), pick "add_transaction".
 - If the message mentions "investments" assume accounts "brokerage" and "roth ira".
-- INFER the category from context: "lunch", "dinner", "restaurant" → "out"; "groceries", "supermarket", "trader joes", "costco" → "groceries"; "uber", "lyft", "taxi" → "lyft"; "amazon", "clothes" → "shopping"; etc. Only use "other" if the category is truly unclear.
+- INFER the category from context: "lunch", "dinner", "restaurant" → "out"; "groceries", "supermarket", "trader joes", "costco" → "groceries"; "uber", "lyft", "taxi" → "lyft"; "amazon", "clothes" → "shopping"; "zelle" → "zelle"; etc. Only use "other" if the category is truly unclear.
 - ALWAYS extract the note: capture the descriptive part of the user's message (vendor, person, item). E.g., "15 starbucks with ana" → note: "starbucks with ana", category: "out".
 - If no account is specified by the user, OMIT the account field entirely. Do NOT guess or default to any account.
 - If no date is specified, OMIT the date field entirely (do not use "today" or any placeholder).
@@ -237,9 +283,11 @@ export async function infer_action(
   });
 
   const text = result.response.text();
+  console.log("[Gemini] Raw response:", text);
 
   try {
     const parsed = extract_json(text);
+    console.log("[Gemini] Parsed JSON:", JSON.stringify(parsed, null, 2));
 
     if (parsed.action === "add_transaction" && parsed.args) {
       const a = parsed.args;
@@ -260,6 +308,10 @@ export async function infer_action(
             category: a.category,
             date: is_valid_date ? a.date : undefined,
             note: typeof a.note === "string" ? a.note : undefined,
+            funding_account:
+              typeof a.funding_account === "string"
+                ? a.funding_account
+                : undefined,
           },
         };
       }
@@ -278,6 +330,10 @@ export async function infer_action(
             category: t.category,
             date: is_valid_date ? t.date : undefined,
             note: typeof t.note === "string" ? t.note : undefined,
+            funding_account:
+              typeof t.funding_account === "string"
+                ? t.funding_account
+                : undefined,
           };
         });
 
@@ -359,6 +415,27 @@ export async function infer_action(
             args: { updates: valid_updates },
           };
         }
+      }
+    }
+
+    if (parsed.action === "create_payment" && parsed.args) {
+      const a = parsed.args;
+      if (typeof a.amount === "number" && a.amount > 0) {
+        const is_valid_date =
+          typeof a.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(a.date);
+
+        return {
+          action: "create_payment",
+          args: {
+            amount: a.amount,
+            from_account:
+              typeof a.from_account === "string" ? a.from_account : undefined,
+            to_account:
+              typeof a.to_account === "string" ? a.to_account : undefined,
+            date: is_valid_date ? a.date : undefined,
+            note: typeof a.note === "string" ? a.note : undefined,
+          },
+        };
       }
     }
 

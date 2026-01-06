@@ -48,7 +48,9 @@ ${expenses.map((e: any) => `- id: "${e.id}", note: "${e.note}"`).join("\n")}`;
     const expense = expenses.find((e: any) => e.id === update.expense_id);
     await call_update_expense_category_tool(update);
     updates.push(
-      `$${expense?.amount || "?"} "${expense?.note || "?"}" → ${update.category}`
+      `$${expense?.amount || "?"} "${expense?.note || "?"}" → ${
+        update.category
+      }`
     );
   }
 
