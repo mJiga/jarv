@@ -50,6 +50,27 @@ export interface add_transactions_batch_result {
   results: add_transactions_batch_item_result[];
 }
 
+// ✅ Only these categories are allowed to be applied/created.
+// If Gemini sends anything else, we force it to "other".
+const ACCEPTED_CATEGORIES = [
+  "paycheck",
+  "out",
+  "lyft",
+  "shopping",
+  "concerts",
+  "zelle",
+  "health",
+  "groceries",
+  "att",
+  "chatgpt",
+  "house",
+  "car",
+  "gas",
+  "other",
+] as const;
+
+type AcceptedCategory = (typeof ACCEPTED_CATEGORIES)[number];
+
 function build_title(input: add_transaction_input): string {
   const is_expense = input.transaction_type === "expense";
   const transaction_type = is_expense ? "expense" : "income";
@@ -142,23 +163,14 @@ export async function add_transaction(
       input.transaction_type === "expense" ? "sapphire" : "checkings";
     const account_name = input.account || default_account;
 
-    // allowed categories - default to "other" if not in list
-    const allowed_categories = [
-      "out",
-      "groceries",
-      "att",
-      "chatgpt",
-      "lyft",
-      "shopping",
-      "health",
-      "car",
-      "house",
-      "zelle",
-      "other",
-    ] as const;
+    // ✅ Enforce accepted categories so Gemini can't introduce new ones.
+    // Unknown/blank categories get forced to "other".
+    const raw_category = (input.category ?? "").trim().toLowerCase();
 
-    const category_name = allowed_categories.includes(input.category as any)
-      ? input.category!
+    const category_name: AcceptedCategory = (
+      ACCEPTED_CATEGORIES as readonly string[]
+    ).includes(raw_category)
+      ? (raw_category as AcceptedCategory)
       : "other";
 
     // allowed accounts guard
@@ -190,17 +202,15 @@ export async function add_transaction(
       };
     }
 
-    const category_page_id =
-      input.transaction_type === "expense"
-        ? await ensure_category_page(category_name)
-        : null;
+    // Resolve category page id for BOTH expenses and income.
+    // Because category_name is whitelisted above, ensure_category_page cannot create random new categories.
+    const category_page_id = await ensure_category_page(category_name);
 
     // Credit card accounts that need funding
     const credit_card_accounts = ["sapphire", "freedom unlimited"] as const;
     const is_credit_card = credit_card_accounts.includes(account_name as any);
 
     // Determine funding account for credit card expenses
-    // Gemini decides the funding_account, we just default to checkings if not specified
     let funding_account_name: string | null = null;
     let funding_account_page_id: string | null = null;
 
@@ -216,7 +226,8 @@ export async function add_transaction(
       if (!allowed_funding.includes(funding_account_name as any)) {
         return {
           success: false,
-          error: `funding_account must be one of: checkings, bills, short term savings.`,
+          error:
+            "funding_account must be one of: checkings, bills, short term savings.",
         };
       }
 
@@ -250,16 +261,10 @@ export async function add_transaction(
       // --- EXPENSES DB ---
       const properties: any = {
         title: {
-          title: [
-            {
-              text: { content: title },
-            },
-          ],
+          title: [{ text: { content: title } }],
         },
         date: {
-          date: {
-            start: iso_date,
-          },
+          date: { start: iso_date },
         },
         amount: {
           number: input.amount,
@@ -268,17 +273,13 @@ export async function add_transaction(
           relation: [{ id: account_page_id }],
         },
         categories: {
-          relation: [{ id: category_page_id! }],
+          relation: [{ id: category_page_id }],
         },
       };
 
       if (input.note) {
         properties.note = {
-          rich_text: [
-            {
-              text: { content: input.note },
-            },
-          ],
+          rich_text: [{ text: { content: input.note } }],
         };
       }
 
@@ -295,7 +296,6 @@ export async function add_transaction(
       });
     } else {
       // --- INCOME DB ---
-      // Look up the budget page by name (default to "default")
       const budget_name = input.budget || "default";
       const budget_pages = await find_budget_rule_pages_by_title(budget_name);
 
@@ -316,55 +316,61 @@ export async function add_transaction(
         };
       }
 
-      // pre_breakdown defaults to amount if not provided (for single income, not split)
       const pre_breakdown =
         typeof input.pre_breakdown === "number"
           ? input.pre_breakdown
           : input.amount;
 
-      response = await notion.pages.create({
-        parent: { database_id: INCOME_DB_ID },
-        properties: {
-          title: {
-            title: [
-              {
-                text: { content: title },
-              },
-            ],
+      // Income DB category relation property name can vary.
+      // To mirror the Expenses DB behavior, we prefer "categories" first
+      // and fall back to "category" if needed.
+      const base_income_properties: any = {
+        title: { title: [{ text: { content: title } }] },
+        date: { date: { start: iso_date } },
+        amount: { number: input.amount },
+        pre_breakdown: { number: pre_breakdown },
+        budget: { relation: [{ id: budget_page_id }] },
+        accounts: { relation: [{ id: account_page_id }] },
+        ...(input.note && {
+          note: { rich_text: [{ text: { content: input.note } }] },
+        }),
+      };
+
+      const try_create_income = async (
+        category_prop_name: "category" | "categories"
+      ) => {
+        return await notion.pages.create({
+          parent: { database_id: INCOME_DB_ID },
+          properties: {
+            ...base_income_properties,
+            [category_prop_name]: { relation: [{ id: category_page_id }] },
           },
-          date: {
-            date: {
-              start: iso_date,
-            },
-          },
-          amount: {
-            number: input.amount,
-          },
-          pre_breakdown: {
-            number: pre_breakdown,
-          },
-          // budget is a relation, percentage is a rollup (auto-calculated)
-          budget: {
-            relation: [{ id: budget_page_id }],
-          },
-          accounts: {
-            relation: [{ id: account_page_id }],
-          },
-        },
-      });
+        });
+      };
+
+      try {
+        response = await try_create_income("categories");
+      } catch (e1: any) {
+        // If "categories" doesn't exist in the Income DB, try "category".
+        // We don't overfit to Notion's error message text because it can vary.
+        try {
+          response = await try_create_income("category");
+        } catch (e2: any) {
+          // Prefer surfacing the original failure (categories) since that's our primary intent.
+          throw e1;
+        }
+      }
     }
 
     const base_msg = `added ${input.transaction_type} of $${input.amount} to ${account_name}`;
 
-    const message =
-      input.transaction_type === "expense"
-        ? `${base_msg} (category: ${category_name}).`
-        : `${base_msg}.`;
-
     return {
       success: true,
       transactionId: response.id,
-      message,
+      message:
+        input.transaction_type === "expense"
+          ? `${base_msg} (category: ${category_name}).`
+          : `${base_msg} (category: ${category_name}).`,
     };
   } catch (err: any) {
     console.error("error adding transaction to Notion:", err);

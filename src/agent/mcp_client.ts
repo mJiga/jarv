@@ -9,7 +9,7 @@ if (!MCP_BASE_URL) {
 
 export interface add_transaction_args {
   amount: number;
-  transaction_type: "expense" | "income";
+  transaction_type: "expense" | "income" | "payment";
   account?:
     | "checkings"
     | "short term savings"
@@ -22,6 +22,10 @@ export interface add_transaction_args {
   category?: string;
   date?: string;
   note?: string;
+
+  // Payment-only fields (used when transaction_type === "payment")
+  from_account?: "checkings" | "bills" | "short term savings";
+  to_account?: "sapphire" | "freedom unlimited";
 }
 
 export interface add_transaction_batch_args {

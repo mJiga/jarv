@@ -138,7 +138,9 @@ export function get_page_title_text(page: any): string {
  * Shared Types
  * ────────────────────────────── */
 
-export type transaction_type = "expense" | "income";
+// NOTE: "payment" is supported for batch imports.
+// Payments are handled by the payments service (create_payment), not by add_transaction.
+export type transaction_type = "expense" | "income" | "payment";
 
 /**
  * Fields that live on an income row in the Notion Income DB.

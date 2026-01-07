@@ -114,12 +114,14 @@ function build_prompt(user_message: string): string {
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
   const yesterday_str = yesterday.toISOString().slice(0, 10);
+  const card_info = `CREDIT CARD LAST 4 DIGITS:\n- Sapphire: ${process.env.SAPPHIRE_LAST4}\n- Freedom Unlimited: ${process.env.FREEDOM_LAST4}`;
 
   return `
 You are a finance command parser for my personal expense tracker.
 
 CURRENT DATE: ${today_str}
 YESTERDAY: ${yesterday_str}
+CC LAST 4 DIGITS: ${card_info}
 
 Your ONLY job is to read the user's message and output STRICT JSON (no extra text).
 You can ONLY choose between these actions:
@@ -166,7 +168,7 @@ OR:
     "transactions": [
       {
         "amount": number,
-        "transaction_type": "expense" | "income",
+        "transaction_type": "expense" | "income" | "payment",
         "account": string,          // optional, OMIT if not specified
         "category": string,         // optional
         "date": "YYYY-MM-DD",       // optional, OMIT if not specified

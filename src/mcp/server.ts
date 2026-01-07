@@ -29,10 +29,11 @@ const server = new McpServer({
  * add_transaction tool
  * ────────────────────────────── */
 
-const transaction_type_values: [transaction_type, transaction_type] = [
-  "expense",
-  "income",
-];
+// NOTE: add_transaction only supports expense/income.
+const transaction_type_values: [
+  Exclude<transaction_type, "payment">,
+  Exclude<transaction_type, "payment">
+] = ["expense", "income"];
 
 const add_transaction_schema = z.object({
   amount: z
@@ -144,7 +145,42 @@ server.registerTool(
 
 const add_transactions_batch_schema = z.object({
   transactions: z
-    .array(add_transaction_schema)
+    .array(
+      z.discriminatedUnion("transaction_type", [
+        add_transaction_schema,
+        z.object({
+          amount: z
+            .number()
+            .positive()
+            .describe("The amount of the payment, positive number."),
+          transaction_type: z
+            .literal("payment")
+            .describe(
+              "A payment (transfer) from one account to a credit card account. This is routed to create_payment."
+            ),
+          from_account: z
+            .enum(["checkings", "bills", "short term savings"])
+            .optional()
+            .describe(
+              "Funding account for the payment. Defaults to 'checkings'."
+            ),
+          to_account: z
+            .enum(["sapphire", "freedom unlimited"])
+            .optional()
+            .describe(
+              "Credit card account being paid. Defaults to 'sapphire'."
+            ),
+          date: z
+            .string()
+            .optional()
+            .describe("ISO date (YYYY-MM-DD). Fallback to today in handler."),
+          note: z
+            .string()
+            .optional()
+            .describe("Optional note/memo for the payment."),
+        }),
+      ])
+    )
     .nonempty()
     .describe("List of transactions to add in a single batch."),
 });
@@ -154,7 +190,7 @@ server.registerTool(
   {
     title: "add multiple transactions",
     description:
-      "Add multiple income/expense transactions in one call. Each entry uses the same shape as add_transaction.",
+      "Add multiple transactions in one call. Supports expense, income, and payment. Payments are routed through the payments service to auto-clear card expenses.",
     inputSchema: add_transactions_batch_schema,
   },
   async (args) => {
