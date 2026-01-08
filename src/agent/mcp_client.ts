@@ -1,5 +1,6 @@
 // src/agent/mcp_client.ts
 import "dotenv/config";
+import crypto from "crypto";
 
 const MCP_BASE_URL = process.env.MCP_BASE_URL ?? "http://localhost:3000";
 
@@ -23,7 +24,7 @@ export interface add_transaction_args {
   date?: string;
   note?: string;
 
-  // Payment-only fields (used when transaction_type === "payment")
+  // Payment-only fields
   from_account?: "checkings" | "bills" | "short term savings";
   to_account?: "sapphire" | "freedom unlimited";
 }
@@ -47,9 +48,6 @@ export interface split_paycheck_args {
   description?: string;
 }
 
-/**
- * helper to call any MCP tool.
- */
 async function call_mcp_tool<T extends object>(
   tool_name: string,
   args: T,
@@ -69,13 +67,15 @@ async function call_mcp_tool<T extends object>(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      // Streamable HTTP transport may respond with SSE
       Accept: "application/json, text/event-stream",
     },
     body: JSON.stringify(body),
   });
 
   if (!res.ok) {
-    throw new Error(`MCP HTTP error: ${res.status} ${res.statusText}`);
+    const text = await res.text().catch(() => "");
+    throw new Error(`MCP HTTP error: ${res.status} ${res.statusText} ${text}`);
   }
 
   const content_type = res.headers.get("content-type") ?? "";
@@ -85,14 +85,18 @@ async function call_mcp_tool<T extends object>(
     const text = await res.text();
     const data_lines = text
       .split("\n")
+      .map((l) => l.trim())
       .filter((line) => line.startsWith("data:"));
 
     if (data_lines.length === 0) {
       throw new Error("No data events in SSE response from MCP");
     }
 
-    const last =
-      data_lines[data_lines.length - 1]?.slice("data:".length).trim() ?? "";
+    const lastLine = data_lines[data_lines.length - 1];
+    if (!lastLine) {
+      throw new Error("No valid data line found in SSE response from MCP");
+    }
+    const last = lastLine.slice("data:".length).trim();
     data = JSON.parse(last);
   } else {
     data = await res.json();
@@ -104,12 +108,12 @@ async function call_mcp_tool<T extends object>(
     );
   }
 
-  const text_result = data.result?.content?.[0]?.text ?? fallback_message;
+  const text_result =
+    data.result?.content?.[0]?.text ??
+    data.result?.content?.find?.((c: any) => c?.type === "text")?.text ??
+    fallback_message;
 
-  return {
-    raw: data,
-    message: text_result as string,
-  };
+  return { raw: data, message: text_result as string };
 }
 
 export async function call_add_transaction_tool(args: add_transaction_args) {
@@ -180,6 +184,101 @@ export async function call_update_expense_category_tool(
     "update_expense_category",
     args,
     "Expense category updated."
+  );
+}
+
+/* ──────────────────────────────
+ * NEW: Stage + confirm category updates
+ * ────────────────────────────── */
+
+export interface stage_expense_category_updates_args {
+  batch_id?: string;
+  updates: Array<{
+    expense_id: string;
+    category: string;
+    amount?: number;
+    note?: string;
+    date?: string;
+  }>;
+}
+
+export async function call_stage_expense_category_updates_tool(
+  args: stage_expense_category_updates_args
+) {
+  return call_mcp_tool(
+    "stage_expense_category_updates",
+    args,
+    "Staged expense category updates."
+  );
+}
+
+export interface confirm_expense_category_updates_args {
+  batch_id: string;
+  confirm: boolean;
+}
+
+export async function call_confirm_expense_category_updates_tool(
+  args: confirm_expense_category_updates_args
+) {
+  return call_mcp_tool(
+    "confirm_expense_category_updates",
+    args,
+    "Confirmed expense category updates."
+  );
+}
+
+/* ──────────────────────────────
+ * NEW: Bank statement staging/confirm/finalize
+ * ────────────────────────────── */
+
+export interface stage_statement_transactions_args {
+  statement_id?: string;
+  source?: {
+    bank_name?: string;
+    statement_period?: string;
+    account_last4?: string;
+    currency?: string;
+  };
+  transactions: Array<add_transaction_args>;
+}
+
+export async function call_stage_statement_transactions_tool(
+  args: stage_statement_transactions_args
+) {
+  return call_mcp_tool(
+    "stage_statement_transactions",
+    args,
+    "Staged statement transactions."
+  );
+}
+
+export interface confirm_statement_import_args {
+  statement_id: string;
+  confirm: boolean;
+}
+
+export async function call_confirm_statement_import_tool(
+  args: confirm_statement_import_args
+) {
+  return call_mcp_tool(
+    "confirm_statement_import",
+    args,
+    "Confirmed statement import."
+  );
+}
+
+export interface finalize_statement_import_args {
+  statement_id: string;
+  imported_transaction_count?: number;
+}
+
+export async function call_finalize_statement_import_tool(
+  args: finalize_statement_import_args
+) {
+  return call_mcp_tool(
+    "finalize_statement_import",
+    args,
+    "Finalized statement import."
   );
 }
 

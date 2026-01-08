@@ -33,24 +33,6 @@ export interface add_transaction_result {
   error?: string;
 }
 
-export interface add_transactions_batch_input {
-  transactions: add_transaction_input[];
-}
-
-export interface add_transactions_batch_item_result {
-  index: number;
-  success: boolean;
-  transaction_id?: string | undefined;
-  message?: string | undefined;
-  error?: string | undefined;
-}
-
-export interface add_transactions_batch_result {
-  success: boolean;
-  results: add_transactions_batch_item_result[];
-}
-
-// ✅ Only these categories are allowed to be applied/created.
 // If Gemini sends anything else, we force it to "other".
 const ACCEPTED_CATEGORIES = [
   "paycheck",
@@ -87,56 +69,6 @@ function build_title(input: add_transaction_input): string {
     }
     return `${transaction_type} ${amount_str} (${acc})`;
   }
-}
-
-/**
- * Add multiple transactions in one call.
- * Each element is passed to add_transaction and its result is collected.
- */
-export async function add_transactions_batch(
-  input: add_transactions_batch_input
-): Promise<add_transactions_batch_result> {
-  const results: add_transactions_batch_item_result[] = [];
-
-  const txs = input.transactions || [];
-
-  for (let i = 0; i < txs.length; i++) {
-    const tx = txs[i];
-
-    // Guard against undefined (satisfies TypeScript)
-    if (!tx) {
-      results.push({
-        index: i,
-        success: false,
-        error: "transaction entry is undefined.",
-      });
-      continue;
-    }
-
-    try {
-      const res: add_transaction_result = await add_transaction(tx);
-
-      results.push({
-        index: i,
-        success: res.success,
-        transaction_id: res.transactionId,
-        message: res.message,
-        error: res.error,
-      });
-    } catch (err: any) {
-      console.error("error in add_transactions_batch item:", err);
-      results.push({
-        index: i,
-        success: false,
-        error: err?.message || "unknown error while adding transaction.",
-      });
-    }
-  }
-
-  return {
-    success: true,
-    results,
-  };
 }
 
 export async function add_transaction(
