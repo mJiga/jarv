@@ -27,7 +27,7 @@ const server = new McpServer({
 });
 
 /* ──────────────────────────────
- * Helpers (strict TS + exactOptionalPropertyTypes)
+ * Helpers
  * ────────────────────────────── */
 
 function make_id(prefix: string) {
@@ -36,10 +36,6 @@ function make_id(prefix: string) {
     : `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
-/**
- * Remove keys with value `undefined` so optional props are truly omitted.
- * Important when `exactOptionalPropertyTypes: true`.
- */
 function omit_undefined<T extends Record<string, any>>(obj: T): Partial<T> {
   const out: Record<string, any> = {};
   for (const [k, v] of Object.entries(obj)) {
@@ -100,7 +96,6 @@ const payment_schema = z.object({
   note: z.string().optional(),
 });
 
-// ✅ Shared union schema used by BOTH batch importing + statement staging
 const statement_transaction_schema = z.discriminatedUnion("transaction_type", [
   add_transaction_schema,
   payment_schema,
@@ -814,7 +809,6 @@ server.registerTool(
   }
 );
 
-// ✅ confirm auto-imports by default
 const confirm_statement_import_schema = z.object({
   statement_id: z.string(),
   confirm: z.boolean(),
