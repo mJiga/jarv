@@ -9,11 +9,7 @@ import {
   call_split_paycheck_tool,
   call_update_last_expense_category_tool,
   call_update_expense_category_tool,
-  call_stage_expense_category_updates_tool,
-  call_confirm_expense_category_updates_tool,
-  call_stage_statement_transactions_tool,
-  call_confirm_statement_import_tool,
-  call_finalize_statement_import_tool,
+  call_update_expense_category_batch_tool,
   call_create_payment_tool,
 } from "./mcp_client";
 import { run_inbox_cleanup } from "./flows/inbox_cleanup";
@@ -56,8 +52,6 @@ app.post("/chat", async (req: Request, res: Response) => {
         mcp_result = await call_add_transaction_tool(action.args);
         break;
 
-      // NOTE: your Gemini might call this "add_transactions_batch" or "add_transaction_batch"
-      case "add_transactions_batch":
       case "add_transaction_batch":
         mcp_result = await call_add_transaction_batch_tool(action.args);
         break;
@@ -75,7 +69,7 @@ app.post("/chat", async (req: Request, res: Response) => {
         break;
 
       case "get_uncategorized_expenses": {
-        // Runs your Gemini categorization flow and stages the updates
+        // Runs inbox cleanup flow: get expenses → categorize → apply directly
         const result = await run_inbox_cleanup();
         return res.json({
           reply: result.message,
@@ -87,56 +81,12 @@ app.post("/chat", async (req: Request, res: Response) => {
         mcp_result = await call_update_expense_category_tool(action.args);
         break;
 
-      case "update_expense_category_batch": {
-        // Stage instead of auto-apply
-        const stage = await call_stage_expense_category_updates_tool({
-          updates: action.args?.updates ?? [],
-        });
-
-        const batch_id =
-          stage.raw?.result?.structuredContent?.batch_id ?? "unknown";
-
-        return res.json({
-          reply:
-            `I staged ${
-              (action.args?.updates ?? []).length
-            } category update(s) (batch_id=${batch_id}). ` +
-            `Say "confirm ${batch_id}" to apply, or tell me what to change.`,
-          meta: {
-            action,
-            batch_id,
-            staged: stage.raw?.result?.structuredContent,
-          },
-        });
-      }
-
-      case "stage_expense_category_updates":
-        mcp_result = await call_stage_expense_category_updates_tool(
-          action.args
-        );
-        break;
-
-      case "confirm_expense_category_updates":
-        mcp_result = await call_confirm_expense_category_updates_tool(
-          action.args
-        );
+      case "update_expense_category_batch":
+        mcp_result = await call_update_expense_category_batch_tool(action.args);
         break;
 
       case "create_payment":
         mcp_result = await call_create_payment_tool(action.args);
-        break;
-
-      // Bank statement tools (passthrough)
-      case "stage_statement_transactions":
-        mcp_result = await call_stage_statement_transactions_tool(action.args);
-        break;
-
-      case "confirm_statement_import":
-        mcp_result = await call_confirm_statement_import_tool(action.args);
-        break;
-
-      case "finalize_statement_import":
-        mcp_result = await call_finalize_statement_import_tool(action.args);
         break;
 
       default:

@@ -153,7 +153,6 @@ export async function call_split_paycheck_tool(args: split_paycheck_args) {
 export interface update_last_expense_category_args {
   category: string;
 }
-
 export async function call_update_last_expense_category_tool(
   args: update_last_expense_category_args
 ) {
@@ -163,7 +162,6 @@ export async function call_update_last_expense_category_tool(
     "Category updated, but no detailed message."
   );
 }
-
 export async function call_get_uncategorized_expenses_tool() {
   return call_mcp_tool(
     "get_uncategorized_expenses",
@@ -171,12 +169,10 @@ export async function call_get_uncategorized_expenses_tool() {
     "Retrieved uncategorized expenses."
   );
 }
-
 export interface update_expense_category_args {
   expense_id: string;
   category: string;
 }
-
 export async function call_update_expense_category_tool(
   args: update_expense_category_args
 ) {
@@ -186,102 +182,21 @@ export async function call_update_expense_category_tool(
     "Expense category updated."
   );
 }
-
-/* ──────────────────────────────
- * NEW: Stage + confirm category updates
- * ────────────────────────────── */
-
-export interface stage_expense_category_updates_args {
-  batch_id?: string;
+export interface update_expense_category_batch_args {
   updates: Array<{
     expense_id: string;
     category: string;
-    amount?: number;
-    note?: string;
-    date?: string;
   }>;
 }
-
-export async function call_stage_expense_category_updates_tool(
-  args: stage_expense_category_updates_args
+export async function call_update_expense_category_batch_tool(
+  args: update_expense_category_batch_args
 ) {
   return call_mcp_tool(
-    "stage_expense_category_updates",
+    "update_expense_category_batch",
     args,
-    "Staged expense category updates."
+    "Batch category updates applied."
   );
 }
-
-export interface confirm_expense_category_updates_args {
-  batch_id: string;
-  confirm: boolean;
-}
-
-export async function call_confirm_expense_category_updates_tool(
-  args: confirm_expense_category_updates_args
-) {
-  return call_mcp_tool(
-    "confirm_expense_category_updates",
-    args,
-    "Confirmed expense category updates."
-  );
-}
-
-/* ──────────────────────────────
- * NEW: Bank statement staging/confirm/finalize
- * ────────────────────────────── */
-
-export interface stage_statement_transactions_args {
-  statement_id?: string;
-  source?: {
-    bank_name?: string;
-    statement_period?: string;
-    account_last4?: string;
-    currency?: string;
-  };
-  transactions: Array<add_transaction_args>;
-}
-
-export async function call_stage_statement_transactions_tool(
-  args: stage_statement_transactions_args
-) {
-  return call_mcp_tool(
-    "stage_statement_transactions",
-    args,
-    "Staged statement transactions."
-  );
-}
-
-export interface confirm_statement_import_args {
-  statement_id: string;
-  confirm: boolean;
-}
-
-export async function call_confirm_statement_import_tool(
-  args: confirm_statement_import_args
-) {
-  return call_mcp_tool(
-    "confirm_statement_import",
-    args,
-    "Confirmed statement import."
-  );
-}
-
-export interface finalize_statement_import_args {
-  statement_id: string;
-  imported_transaction_count?: number;
-}
-
-export async function call_finalize_statement_import_tool(
-  args: finalize_statement_import_args
-) {
-  return call_mcp_tool(
-    "finalize_statement_import",
-    args,
-    "Finalized statement import."
-  );
-}
-
 export interface create_payment_args {
   amount: number;
   from_account?: "checkings" | "bills" | "short term savings";
@@ -289,7 +204,6 @@ export interface create_payment_args {
   date?: string;
   note?: string;
 }
-
 export async function call_create_payment_tool(args: create_payment_args) {
   return call_mcp_tool("create_payment", args, "Payment created.");
 }

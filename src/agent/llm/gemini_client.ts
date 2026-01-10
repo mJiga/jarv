@@ -112,80 +112,6 @@ export type parsed_action =
       };
     }
   | {
-      action: "stage_expense_category_updates";
-      args: {
-        batch_id?: string;
-        updates: Array<{
-          expense_id: string;
-          category: string;
-          amount?: number;
-          note?: string;
-          date?: string;
-        }>;
-      };
-    }
-  | {
-      action: "confirm_expense_category_updates";
-      args: {
-        batch_id: string;
-        confirm: boolean;
-      };
-    }
-  | {
-      action: "stage_statement_transactions";
-      args: {
-        statement_id?: string;
-        source?: {
-          bank_name?: string;
-          statement_period?: string;
-          account_last4?: string;
-          currency?: string;
-        };
-        transactions: Array<
-          | {
-              amount: number;
-              transaction_type: "expense" | "income";
-              account?:
-                | "checkings"
-                | "short term savings"
-                | "bills"
-                | "freedom unlimited"
-                | "sapphire"
-                | "brokerage"
-                | "roth ira"
-                | "spaxx";
-              category?: string;
-              date?: string;
-              note?: string;
-              funding_account?: "checkings" | "bills" | "short term savings";
-            }
-          | {
-              amount: number;
-              transaction_type: "payment";
-              from_account?: "checkings" | "bills" | "short term savings";
-              to_account?: "sapphire" | "freedom unlimited";
-              date?: string;
-              note?: string;
-            }
-        >;
-      };
-    }
-  | {
-      action: "confirm_statement_import";
-      args: {
-        statement_id: string;
-        confirm: boolean;
-        import_now?: boolean;
-      };
-    }
-  | {
-      action: "finalize_statement_import";
-      args: {
-        statement_id: string;
-        imported_transaction_count?: number;
-      };
-    }
-  | {
       action: "unknown";
       reason?: string;
     };
@@ -216,7 +142,7 @@ CARD MATCHING RULES (IMPORTANT):
 Your ONLY job is to read the user's message and output STRICT JSON (no extra text).
 You can ONLY choose between these actions:
 - "add_transaction": when the user clearly wants to add a SINGLE expense or income. This is the DEFAULT for most messages.
-- "add_transaction_batch": when the user clearly wants to add MULTIPLE transactions at once.
+- "add_transaction_batch": when the user clearly wants to add MULTIPLE transactions at once, OR when importing from a statement/image.
 - NOTE: "add_transaction_batch" MAY include credit card payments when importing statements/images. In that case, each payment item MUST set "transaction_type": "payment" and use the payment fields (amount, from_account?, to_account?, date?, note?) and MUST OMIT expense/income fields like category, account, and funding_account.
 - "set_budget_rule": ONLY when the user wants to CREATE or UPDATE budget allocation percentages (e.g., "set my budget to 50% checkings, 30% savings").
 - "split_paycheck": ONLY when the user mentions a SPECIFIC EMPLOYER/INCOME SOURCE name. Known budget names: "hunt", "msft", "default". Patterns:
@@ -226,20 +152,13 @@ You can ONLY choose between these actions:
   * DO NOT use split_paycheck for generic phrases like "i got paid", "got paid today" without a specific employer name - use "default" instead.
 - "update_last_expense_category": when the user wants to change/fix the category of the last added expense (e.g., "actually that was groceries", "change it to shopping").
 - "get_uncategorized_expenses": when user asks to review/clean up the inbox, see what's in "other", or sort uncategorized expenses.
-- "update_expense_category_batch": when given a list of expenses with IDs to categorize. INFER the best category for each based on its note.
+- "update_expense_category_batch": when given a list of expenses with IDs to categorize, OR when you need to categorize multiple expenses. INFER the best category for each based on its note.
 - "create_payment": ONLY for credit card payments. Must mention a credit card name (sapphire, freedom) OR explicitly say "credit card payment". Patterns:
   * "pay <amount> to sapphire/freedom"
   * "credit card payment <amount>"
   * "pay off sapphire/freedom <amount>"
   * "cc payment <amount>"
   * DO NOT use create_payment for "paid <person> <amount>" - that's a zelle expense (add_transaction with category "zelle").
-
-STAGING / CONFIRMATION ACTIONS (NO WRITES UNTIL CONFIRM):
-- "stage_expense_category_updates": use when you want to PREVIEW a batch of category edits first (no writes). Returns a batch_id to confirm later.
-- "confirm_expense_category_updates": use ONLY after staging; applies the staged category updates using the batch_id. Requires a boolean confirm.
-- "stage_statement_transactions": use when transactions have already been extracted (e.g., from an image/statement) and you want to stage them for user review (no writes). Returns a statement_id to confirm later.
-- "confirm_statement_import": confirms a staged statement. If confirm=true, it may import immediately (import_now defaults true). If import_now=false, it confirms without importing.
-- "finalize_statement_import": clears pending statement state (housekeeping). Provide statement_id and optionally imported_transaction_count.
 
 JSON schema:
 
@@ -290,23 +209,6 @@ IMPORTANT (batch payments): If a batch item has "transaction_type": "payment", t
 }
 
 OR:
-
-{
-{
-  "action": "set_budget_rule",
-  "args": {
-    "budget_name": string,            // name of the budget rule (e.g., "default", "paycheck")
-    "budgets": [                    // list of budget allocations, percentages MUST sum to 1.0
-      {
-        "account": string,          // one of: "checkings", "short term savings", "bills", "freedom unlimited", "sapphire", "brokerage", "roth ira", "spaxx"
-        "percentage": number        // fraction 0–1 (e.g., 0.5 for 50%)
-      }
-    ]
-  }
-}
-
-IMPORTANT (valid JSON): The example above may contain formatting artifacts (e.g., extra braces). Your output MUST be valid JSON.
-Here is a correct shape for set_budget_rule (copy this structure):
 
 {
   "action": "set_budget_rule",
@@ -371,86 +273,6 @@ OR:
   }
 }
 
-STAGING SCHEMAS:
-
-1) Stage expense category updates (NO WRITES):
-{
-  "action": "stage_expense_category_updates",
-  "args": {
-    "batch_id": string,        // optional; OMIT unless you are continuing a known batch
-    "updates": [
-      {
-        "expense_id": string,  // REQUIRED
-        "category": string,    // REQUIRED
-        "amount": number,      // optional
-        "note": string,        // optional
-        "date": "YYYY-MM-DD"  // optional
-      }
-    ]
-  }
-}
-
-2) Confirm expense category updates (APPLIES WRITES):
-{
-  "action": "confirm_expense_category_updates",
-  "args": {
-    "batch_id": string,        // REQUIRED; must come from stage_expense_category_updates response
-    "confirm": boolean         // REQUIRED
-  }
-}
-
-3) Stage statement transactions (NO OCR HERE, NO WRITES):
-{
-  "action": "stage_statement_transactions",
-  "args": {
-    "statement_id": string,    // optional; OMIT unless you are continuing a known staged statement
-    "source": {                // optional metadata
-      "bank_name": string,
-      "statement_period": string,
-      "account_last4": string,
-      "currency": string
-    },
-    "transactions": [
-      {
-        "amount": number,
-        "transaction_type": "expense" | "income",
-        "account": string,
-        "category": string,
-        "date": "YYYY-MM-DD",
-        "note": string,
-        "funding_account": "checkings" | "bills" | "short term savings"
-      },
-      OR
-      {
-        "amount": number,
-        "transaction_type": "payment",
-        "from_account": "checkings" | "bills" | "short term savings",
-        "to_account": "sapphire" | "freedom unlimited",
-        "date": "YYYY-MM-DD",
-        "note": string
-      }
-    ]
-  }
-}
-
-4) Confirm statement import:
-{
-  "action": "confirm_statement_import",
-  "args": {
-    "statement_id": string,    // REQUIRED; must come from stage_statement_transactions response
-    "confirm": boolean,        // REQUIRED
-    "import_now": boolean      // optional; defaults to true
-  }
-}
-
-5) Finalize statement import (cleanup):
-{
-  "action": "finalize_statement_import",
-  "args": {
-    "statement_id": string,                 // REQUIRED
-    "imported_transaction_count": number    // optional
-  }
-}
 
 Rules:
 - Respond with JSON ONLY. No code fences, no Markdown, no explanations.
@@ -468,7 +290,6 @@ Rules:
   This applies to both expenses (account) and payments (to_account).
 - Amount parsing: Extract numeric amounts from formats like "$12.34", "12", "12.00", "1,234.56". Amounts must be positive numbers.
 - If no date is specified, OMIT the date field entirely (do not use "today" or any placeholder).
-- Staging IDs: For stage_* actions, OMIT batch_id/statement_id unless you are continuing an existing staged item. For confirm_* actions, batch_id/statement_id is REQUIRED and must be the one returned by the corresponding stage tool.
 
 User message:
 ${user_message}
@@ -663,159 +484,6 @@ export async function infer_action(
               typeof a.to_account === "string" ? a.to_account : undefined,
             date: is_valid_date ? a.date : undefined,
             note: typeof a.note === "string" ? a.note : undefined,
-          },
-        };
-      }
-    }
-
-    if (parsed.action === "stage_expense_category_updates" && parsed.args) {
-      const a = parsed.args;
-      if (Array.isArray(a.updates) && a.updates.length > 0) {
-        const valid_updates = a.updates.filter(
-          (u: any) =>
-            typeof u.expense_id === "string" &&
-            typeof u.category === "string" &&
-            u.expense_id.length > 0 &&
-            u.category.length > 0
-        );
-
-        if (valid_updates.length > 0) {
-          const cleaned_updates = valid_updates.map((u: any) => {
-            const is_valid_date =
-              typeof u.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(u.date);
-            return {
-              expense_id: u.expense_id,
-              category: u.category,
-              amount: typeof u.amount === "number" ? u.amount : undefined,
-              note: typeof u.note === "string" ? u.note : undefined,
-              date: is_valid_date ? u.date : undefined,
-            };
-          });
-
-          return {
-            action: "stage_expense_category_updates",
-            args: {
-              batch_id: typeof a.batch_id === "string" ? a.batch_id : undefined,
-              updates: cleaned_updates,
-            },
-          };
-        }
-      }
-    }
-
-    if (parsed.action === "confirm_expense_category_updates" && parsed.args) {
-      const a = parsed.args;
-      if (typeof a.batch_id === "string" && typeof a.confirm === "boolean") {
-        return {
-          action: "confirm_expense_category_updates",
-          args: {
-            batch_id: a.batch_id,
-            confirm: a.confirm,
-          },
-        };
-      }
-    }
-
-    if (parsed.action === "stage_statement_transactions" && parsed.args) {
-      const a = parsed.args;
-      if (Array.isArray(a.transactions) && a.transactions.length > 0) {
-        const validated_transactions = a.transactions.map((t: any) => {
-          const is_valid_date =
-            typeof t.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(t.date);
-
-          if (t.transaction_type === "payment") {
-            return {
-              amount: t.amount,
-              transaction_type: "payment" as const,
-              from_account:
-                typeof t.from_account === "string" ? t.from_account : undefined,
-              to_account:
-                typeof t.to_account === "string" ? t.to_account : undefined,
-              date: is_valid_date ? t.date : undefined,
-              note: typeof t.note === "string" ? t.note : undefined,
-            };
-          }
-
-          return {
-            amount: t.amount,
-            transaction_type: t.transaction_type,
-            account: typeof t.account === "string" ? t.account : undefined,
-            category: t.category,
-            date: is_valid_date ? t.date : undefined,
-            note: typeof t.note === "string" ? t.note : undefined,
-            funding_account:
-              typeof t.funding_account === "string"
-                ? t.funding_account
-                : undefined,
-          };
-        });
-
-        const source =
-          a.source && typeof a.source === "object"
-            ? {
-                bank_name:
-                  typeof a.source.bank_name === "string"
-                    ? a.source.bank_name
-                    : undefined,
-                statement_period:
-                  typeof a.source.statement_period === "string"
-                    ? a.source.statement_period
-                    : undefined,
-                account_last4:
-                  typeof a.source.account_last4 === "string"
-                    ? a.source.account_last4
-                    : undefined,
-                currency:
-                  typeof a.source.currency === "string"
-                    ? a.source.currency
-                    : undefined,
-              }
-            : undefined;
-
-        const args: any = {
-          statement_id:
-            typeof a.statement_id === "string" ? a.statement_id : undefined,
-          transactions: validated_transactions,
-        };
-        if (source) {
-          args.source = source;
-        }
-        return {
-          action: "stage_statement_transactions",
-          args,
-        };
-      }
-    }
-
-    if (parsed.action === "confirm_statement_import" && parsed.args) {
-      const a = parsed.args;
-      if (
-        typeof a.statement_id === "string" &&
-        typeof a.confirm === "boolean"
-      ) {
-        return {
-          action: "confirm_statement_import",
-          args: {
-            statement_id: a.statement_id,
-            confirm: a.confirm,
-            import_now:
-              typeof a.import_now === "boolean" ? a.import_now : undefined,
-          },
-        };
-      }
-    }
-
-    if (parsed.action === "finalize_statement_import" && parsed.args) {
-      const a = parsed.args;
-      if (typeof a.statement_id === "string" && a.statement_id.length > 0) {
-        return {
-          action: "finalize_statement_import",
-          args: {
-            statement_id: a.statement_id,
-            imported_transaction_count:
-              typeof a.imported_transaction_count === "number"
-                ? a.imported_transaction_count
-                : undefined,
           },
         };
       }
