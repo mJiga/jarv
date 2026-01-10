@@ -883,7 +883,7 @@ server.registerTool(
 
     const results = await process_transactions_batch(pending.transactions);
 
-    // ✅ clear after import
+    // clear after import
     pending_statements.delete(statement_id);
 
     return {
