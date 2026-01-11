@@ -3,7 +3,15 @@ import { notion, PAYMENTS_DB_ID, EXPENSES_DB_ID } from "../notion/client";
 import {
   find_account_page_by_title,
   query_data_source_with_filter,
+  validate_category,
+  ensure_category_page,
 } from "../notion/utils";
+import {
+  FUNDING_ACCOUNTS,
+  CREDIT_CARD_ACCOUNTS,
+  is_valid_funding_account,
+  is_valid_credit_card_account,
+} from "../constants";
 
 export interface create_payment_input {
   amount: number;
@@ -11,6 +19,7 @@ export interface create_payment_input {
   to_account?: string | undefined; // e.g., "sapphire", "freedom unlimited" - defaults to "sapphire"
   date?: string | undefined; // ISO date, defaults to today
   note?: string | undefined;
+  category?: string | undefined; // optional category for the payment
 }
 
 export interface cleared_expense_info {
@@ -21,12 +30,12 @@ export interface cleared_expense_info {
 
 export interface create_payment_result {
   success: boolean;
-  payment_id?: string;
+  payment_id?: string | undefined;
   cleared_expenses: cleared_expense_info[];
   cleared_total: number;
   remaining_unapplied: number;
-  message?: string;
-  error?: string;
+  message?: string | undefined;
+  error?: string | undefined;
 }
 
 /**
@@ -59,29 +68,20 @@ export async function create_payment(
     const to_account = input.to_account || "sapphire";
 
     // Validate accounts
-    const allowed_from_accounts = [
-      "checkings",
-      "bills",
-      "short term savings",
-    ] as const;
-    const allowed_to_accounts = ["sapphire", "freedom unlimited"] as const;
-
-    if (!allowed_from_accounts.includes(from_account as any)) {
+    if (!is_valid_funding_account(from_account)) {
       return {
         success: false,
-        error: `from_account must be one of: ${allowed_from_accounts.join(
-          ", "
-        )}`,
+        error: `from_account must be one of: ${FUNDING_ACCOUNTS.join(", ")}`,
         cleared_expenses: [],
         cleared_total: 0,
         remaining_unapplied: 0,
       };
     }
 
-    if (!allowed_to_accounts.includes(to_account as any)) {
+    if (!is_valid_credit_card_account(to_account)) {
       return {
         success: false,
-        error: `to_account must be one of: ${allowed_to_accounts.join(", ")}`,
+        error: `to_account must be one of: ${CREDIT_CARD_ACCOUNTS.join(", ")}`,
         cleared_expenses: [],
         cleared_total: 0,
         remaining_unapplied: 0,
@@ -115,6 +115,15 @@ export async function create_payment(
     const today = new Date();
     const iso_date = input.date || today.toISOString().slice(0, 10);
 
+    // Handle optional category
+    const category_name = input.category
+      ? validate_category(input.category)
+      : null;
+    let category_page_id: string | null = null;
+    if (category_name) {
+      category_page_id = await ensure_category_page(category_name);
+    }
+
     // Build title
     const title = `payment $${input.amount} ${from_account} → ${to_account}`;
 
@@ -140,6 +149,13 @@ export async function create_payment(
     if (input.note) {
       payment_properties.note = {
         rich_text: [{ text: { content: input.note } }],
+      };
+    }
+
+    // Add category if provided
+    if (category_page_id) {
+      payment_properties.categories = {
+        relation: [{ id: category_page_id }],
       };
     }
 
@@ -296,88 +312,6 @@ export async function create_payment(
       cleared_expenses: [],
       cleared_total: 0,
       remaining_unapplied: 0,
-    };
-  }
-}
-
-/**
- * Get summary of uncleared expenses by funding account.
- * Useful to see how much is owed from each account.
- */
-export interface uncleared_summary {
-  from_account: string;
-  to_account: string;
-  total_uncleared: number;
-  expense_count: number;
-}
-
-export async function get_uncleared_expenses_summary(): Promise<{
-  success: boolean;
-  summaries: uncleared_summary[];
-  error?: string;
-}> {
-  try {
-    // Query all uncleared expenses
-    const results = await query_data_source_with_filter(EXPENSES_DB_ID, {
-      property: "cleared",
-      checkbox: {
-        equals: false,
-      },
-    });
-
-    // Group by funding_account + accounts
-    const groups: Map<
-      string,
-      { total: number; count: number; from: string; to: string }
-    > = new Map();
-
-    for (const page of results) {
-      const props = (page as any).properties;
-      const amount = props.amount?.number || 0;
-
-      // Get account name (to_account)
-      const account_rel = props.accounts?.relation?.[0]?.id;
-      // Get funding_account name (from_account)
-      const funding_rel = props.funding_account?.relation?.[0]?.id;
-
-      if (!account_rel || !funding_rel) continue;
-
-      const key = `${funding_rel}→${account_rel}`;
-
-      const existing = groups.get(key);
-      if (existing) {
-        existing.total += amount;
-        existing.count += 1;
-      } else {
-        groups.set(key, {
-          total: amount,
-          count: 1,
-          from: funding_rel,
-          to: account_rel,
-        });
-      }
-    }
-
-    // We'd need to resolve IDs to names, but for now return IDs
-    // TODO: resolve page IDs to account names
-
-    const summaries: uncleared_summary[] = [];
-    for (const [, value] of groups) {
-      summaries.push({
-        from_account: value.from,
-        to_account: value.to,
-        total_uncleared: value.total,
-        expense_count: value.count,
-      });
-    }
-
-    return { success: true, summaries };
-  } catch (err: any) {
-    console.error("[payments] Error in get_uncleared_expenses_summary:", err);
-    return {
-      success: false,
-      summaries: [],
-      error: err?.message || "unknown error",
     };
   }
 }

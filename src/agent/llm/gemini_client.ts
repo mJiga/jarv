@@ -15,7 +15,7 @@ export type parsed_action =
       action: "add_transaction";
       args: {
         amount: number;
-        transaction_type: "expense" | "income";
+        transaction_type: "expense" | "income" | "payment";
         account?:
           | "checkings"
           | "short term savings"
@@ -29,38 +29,33 @@ export type parsed_action =
         date?: string;
         note?: string;
         funding_account?: "checkings" | "bills" | "short term savings";
+        // Payment-specific fields
+        from_account?: "checkings" | "bills" | "short term savings";
+        to_account?: "sapphire" | "freedom unlimited";
       };
     }
   | {
       action: "add_transaction_batch";
       args: {
-        transactions: Array<
-          | {
-              amount: number;
-              transaction_type: "expense" | "income";
-              account?:
-                | "checkings"
-                | "short term savings"
-                | "bills"
-                | "freedom unlimited"
-                | "sapphire"
-                | "brokerage"
-                | "roth ira"
-                | "spaxx";
-              category?: string;
-              date?: string;
-              note?: string;
-              funding_account?: "checkings" | "bills" | "short term savings";
-            }
-          | {
-              amount: number;
-              transaction_type: "payment";
-              from_account?: "checkings" | "bills" | "short term savings";
-              to_account?: "sapphire" | "freedom unlimited";
-              date?: string;
-              note?: string;
-            }
-        >;
+        transactions: Array<{
+          amount: number;
+          transaction_type: "expense" | "income" | "payment";
+          account?:
+            | "checkings"
+            | "short term savings"
+            | "bills"
+            | "freedom unlimited"
+            | "sapphire"
+            | "brokerage"
+            | "roth ira"
+            | "spaxx";
+          category?: string;
+          date?: string;
+          note?: string;
+          funding_account?: "checkings" | "bills" | "short term savings";
+          from_account?: "checkings" | "bills" | "short term savings";
+          to_account?: "sapphire" | "freedom unlimited";
+        }>;
       };
     }
   | {
@@ -83,32 +78,27 @@ export type parsed_action =
       };
     }
   | {
-      action: "update_last_expense_category";
+      action: "get_uncategorized_transactions";
+      args: Record<string, never>;
+    }
+  | {
+      action: "get_categories";
+      args: Record<string, never>;
+    }
+  | {
+      action: "update_transaction_category";
       args: {
+        expense_id: string;
         category: string;
       };
     }
   | {
-      action: "get_uncategorized_expenses";
-      args: Record<string, never>;
-    }
-  | {
-      action: "update_expense_category_batch";
+      action: "update_transaction_categories_batch";
       args: {
         updates: Array<{
           expense_id: string;
           category: string;
         }>;
-      };
-    }
-  | {
-      action: "create_payment";
-      args: {
-        amount: number;
-        from_account?: "checkings" | "bills" | "short term savings";
-        to_account?: "sapphire" | "freedom unlimited";
-        date?: string;
-        note?: string;
       };
     }
   | {
@@ -141,24 +131,17 @@ CARD MATCHING RULES (IMPORTANT):
 
 Your ONLY job is to read the user's message and output STRICT JSON (no extra text).
 You can ONLY choose between these actions:
-- "add_transaction": when the user clearly wants to add a SINGLE expense or income. This is the DEFAULT for most messages.
-- "add_transaction_batch": when the user clearly wants to add MULTIPLE transactions at once, OR when importing from a statement/image.
-- NOTE: "add_transaction_batch" MAY include credit card payments when importing statements/images. In that case, each payment item MUST set "transaction_type": "payment" and use the payment fields (amount, from_account?, to_account?, date?, note?) and MUST OMIT expense/income fields like category, account, and funding_account.
-- "set_budget_rule": ONLY when the user wants to CREATE or UPDATE budget allocation percentages (e.g., "set my budget to 50% checkings, 30% savings").
-- "split_paycheck": ONLY when the user mentions a SPECIFIC EMPLOYER/INCOME SOURCE name. Known budget names: "hunt", "msft", "default". Patterns:
-  * "<employer> paid <amount>" (e.g., "hunt paid 440", "msft paid 1200")
-  * "got <amount> from <employer>" (e.g., "got 500 from hunt")
-  * "<employer> <amount>" ONLY if <employer> is a known budget name above (e.g., "msft 1500", "hunt 440")
-  * DO NOT use split_paycheck for generic phrases like "i got paid", "got paid today" without a specific employer name - use "default" instead.
-- "update_last_expense_category": when the user wants to change/fix the category of the last added expense (e.g., "actually that was groceries", "change it to shopping").
-- "get_uncategorized_expenses": when user asks to review/clean up the inbox, see what's in "other", or sort uncategorized expenses.
-- "update_expense_category_batch": when given a list of expenses with IDs to categorize, OR when you need to categorize multiple expenses. INFER the best category for each based on its note.
-- "create_payment": ONLY for credit card payments. Must mention a credit card name (sapphire, freedom) OR explicitly say "credit card payment". Patterns:
-  * "pay <amount> to sapphire/freedom"
-  * "credit card payment <amount>"
-  * "pay off sapphire/freedom <amount>"
-  * "cc payment <amount>"
-  * DO NOT use create_payment for "paid <person> <amount>" - that's a zelle expense (add_transaction with category "zelle").
+- "add_transaction": when the user wants to add a SINGLE expense, income, OR credit card payment. This is the unified entry point for all transaction types.
+  * For expenses: set transaction_type to "expense"
+  * For income: set transaction_type to "income"
+  * For credit card payments: set transaction_type to "payment" (must mention a credit card name like sapphire/freedom OR say "credit card payment")
+- "add_transaction_batch": when the user wants to add MULTIPLE transactions at once, OR when importing from a statement/image.
+- "set_budget_rule": ONLY when the user wants to CREATE or UPDATE budget allocation percentages.
+- "split_paycheck": ONLY when the user mentions a SPECIFIC EMPLOYER/INCOME SOURCE name. Known budget names: "hunt", "msft", "default".
+- "get_uncategorized_transactions": when user asks to review/clean up the inbox, see what's in "other", or sort uncategorized transactions.
+- "get_categories": when you need to know the valid expense categories. Returns the list of categories from the database.
+- "update_transaction_category": when the user wants to change the category of a specific transaction by ID.
+- "update_transaction_categories_batch": when given a list of transactions with IDs to categorize.
 
 JSON schema:
 
@@ -166,15 +149,16 @@ JSON schema:
   "action": "add_transaction",
   "args": {
     "amount": number,
-    "transaction_type": "expense" | "income",
+    "transaction_type": "expense" | "income" | "payment",
+    // For expense/income:
     "account": string,                // one of: "checkings", "short term savings", "bills", "freedom unlimited", "sapphire", "brokerage", "roth ira", "spaxx". Otherwise OMIT if not specified.
-    "category": string,               // one of: "out" (eating out/restaurants), "groceries", "att" (phone bill), "chatgpt" (AI subscriptions), "lyft" (rideshare/transport), "shopping", "health", "car", "house", "zelle", "other". INFER from context - only use "other" if truly unclear.
+    "category": string,               // Call get_categories MCP tool to see valid options. Common ones: "out" (eating out), "groceries", "lyft", "shopping", "zelle", "health", "car", "house". INFER from context - only use "other" if truly unclear.
     "date": "YYYY-MM-DD",             // optional. For "yesterday" use YESTERDAY date above. For "today" or no date mentioned, OMIT this field.
-    "note": string,                   // optional but IMPORTANT: capture the FULL original description from the user, but EXCLUDE date words like "yesterday". E.g., "$9 coffee yesterday" → note: "coffee". "$15 coffee with Ana" → note: "coffee with Ana".
-    "funding_account": "checkings" | "bills" | "short term savings"  // REQUIRED for expenses. Determines which account funds this expense:
-                                      // - "bills" for: groceries, att, chatgpt, utilities, subscriptions, health, car, house
-                                      // - "checkings" for: out/restaurants, shopping, lyft, zelle
-                                      // - "short term savings" ONLY if user explicitly says to fund from savings
+    "note": string,                   // optional but IMPORTANT: capture the FULL original description from the user.
+    "funding_account": "checkings" | "bills" | "short term savings",  // REQUIRED for credit card expenses.
+    // For payment:
+    "from_account": "checkings" | "bills" | "short term savings",     // optional, where the money comes from. Defaults to "checkings".
+    "to_account": "sapphire" | "freedom unlimited"                    // the credit card being paid. Defaults to "sapphire".
   }
 }
 
@@ -187,25 +171,16 @@ OR:
       {
         "amount": number,
         "transaction_type": "expense" | "income" | "payment",
-        "account": string,          // optional, OMIT if not specified
-        "category": string,         // optional
-        "date": "YYYY-MM-DD",       // optional, OMIT if not specified
-        "note": string,             // optional, extra context
-        "funding_account": "checkings" | "bills" | "short term savings"  // REQUIRED for expenses. Same rules as add_transaction.
+        "account": string,          // optional, for expense/income
+        "category": string,         // optional, for expense/income
+        "date": "YYYY-MM-DD",       // optional
+        "note": string,             // optional
+        "funding_account": "checkings" | "bills" | "short term savings",  // for credit card expenses
+        "from_account": "checkings" | "bills" | "short term savings",     // for payments
+        "to_account": "sapphire" | "freedom unlimited"                    // for payments
       }
     ]
   }
-}
-
-IMPORTANT (batch payments): If a batch item has "transaction_type": "payment", the object MUST look like this (and MUST NOT include category/account/funding_account):
-
-{
-  "amount": number,
-  "transaction_type": "payment",
-  "from_account": "checkings" | "bills" | "short term savings",   // optional, defaults to "checkings" if not specified
-  "to_account": "sapphire" | "freedom unlimited",                 // the credit card being paid, defaults to "sapphire" if not specified
-  "date": "YYYY-MM-DD",                                            // optional
-  "note": string                                                    // optional
 }
 
 OR:
@@ -235,41 +210,36 @@ OR:
 OR:
 
 {
-  "action": "update_last_expense_category",
-  "args": {
-    "category": string          // new category (e.g., "groceries", "out", "lyft")
-  }
-}
-
-OR:
-
-{
-  "action": "get_uncategorized_expenses",
+  "action": "get_uncategorized_transactions",
   "args": {}
 }
 
 OR:
 
 {
-  "action": "update_expense_category_batch",
+  "action": "get_categories",
+  "args": {}
+}
+
+OR:
+
+{
+  "action": "update_transaction_category",
   "args": {
-    "updates": [
-      { "expense_id": string, "category": string },
-      ...
-    ]
+    "expense_id": string,
+    "category": string
   }
 }
 
 OR:
 
 {
-  "action": "create_payment",
+  "action": "update_transaction_categories_batch",
   "args": {
-    "amount": number,               // payment amount
-    "from_account": "checkings" | "bills" | "short term savings",  // optional, where the money comes from. Defaults to "checkings" if not specified.
-    "to_account": "sapphire" | "freedom unlimited",  // the credit card being paid. Defaults to "sapphire" if not specified.
-    "date": "YYYY-MM-DD",           // optional, OMIT if not specified
-    "note": string                  // optional
+    "updates": [
+      { "expense_id": string, "category": string },
+      ...
+    ]
   }
 }
 
@@ -279,17 +249,17 @@ Rules:
 - IMPORTANT: If message matches "<name> paid <amount>" or "<name> <amount>", use "split_paycheck" with budget_name = <name>.
 - If the user says a generic paycheck like "got paid" / "i got paid" without an employer, STILL use "split_paycheck" with budget_name = "default".
 - If the message is clearly about adding a single expense or income (not a paycheck), pick "add_transaction".
+- For credit card payments (paying off a card), use "add_transaction" with transaction_type = "payment".
 - If the message mentions "investments" assume accounts "brokerage" and "roth ira".
 - INFER the category from context: "lunch", "dinner", "restaurant" → "out"; "groceries", "supermarket", "trader joes", "costco" → "groceries"; "uber", "lyft", "taxi" → "lyft"; "amazon", "clothes" → "shopping"; "zelle" → "zelle"; "paid <person>" or "sent <person>" → "zelle" (these are personal payments, NOT credit card payments). Only use "other" if the category is truly unclear.
-- ALWAYS extract the note: capture the descriptive part of the user's message (vendor, person, item). E.g., "15 starbucks with ana" → note: "starbucks with ana", category: "out".
-- For zelle/personal payments (category "zelle"), ALWAYS set account to "checkings". For other categories, OMIT account if not specified.
-- Funding account guidance: Only include "funding_account" when the expense is on a credit card account ("sapphire" or "freedom unlimited") or when the user explicitly says which account funds it. Otherwise OMIT funding_account.
+- ALWAYS extract the note: capture the descriptive part of the user's message.
+- For zelle/personal payments (category "zelle"), ALWAYS set account to "checkings".
+- Funding account guidance: Only include "funding_account" when the expense is on a credit card account ("sapphire" or "freedom unlimited").
 - Credit card identification: If the user includes a credit card's last 4 digits, map it to the correct card/account:
   * If the message contains the Sapphire last4 (${process.env.SAPPHIRE_LAST4}), treat the card/account as "sapphire".
   * If the message contains the Freedom Unlimited last4 (${process.env.FREEDOM_LAST4}), treat the card/account as "freedom unlimited".
-  This applies to both expenses (account) and payments (to_account).
 - Amount parsing: Extract numeric amounts from formats like "$12.34", "12", "12.00", "1,234.56". Amounts must be positive numbers.
-- If no date is specified, OMIT the date field entirely (do not use "today" or any placeholder).
+- If no date is specified, OMIT the date field entirely.
 
 User message:
 ${user_message}
@@ -297,10 +267,10 @@ ${user_message}
 }
 
 function extract_json(text: string): any {
-  // Sometimes models wrap JSON in ```...```
+  // Sometimes models wrap JSON in \`\`\`...\`\`\`
   const trimmed = text.trim();
 
-  const code_fence_match = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const code_fence_match = trimmed.match(/\`\`\`(?:json)?\s*([\s\S]*?)\`\`\`/i);
   const json_text = code_fence_match ? code_fence_match[1] : trimmed;
 
   if (!json_text) {
@@ -329,9 +299,10 @@ export async function infer_action(
       const a = parsed.args;
       if (
         typeof a.amount === "number" &&
-        (a.transaction_type === "expense" || a.transaction_type === "income")
+        (a.transaction_type === "expense" ||
+          a.transaction_type === "income" ||
+          a.transaction_type === "payment")
       ) {
-        // Only include date if it's a valid ISO date (YYYY-MM-DD)
         const is_valid_date =
           typeof a.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(a.date);
 
@@ -348,6 +319,10 @@ export async function infer_action(
               typeof a.funding_account === "string"
                 ? a.funding_account
                 : undefined,
+            from_account:
+              typeof a.from_account === "string" ? a.from_account : undefined,
+            to_account:
+              typeof a.to_account === "string" ? a.to_account : undefined,
           },
         };
       }
@@ -360,19 +335,6 @@ export async function infer_action(
           const is_valid_date =
             typeof t.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(t.date);
 
-          if (t.transaction_type === "payment") {
-            return {
-              amount: t.amount,
-              transaction_type: "payment" as const,
-              from_account:
-                typeof t.from_account === "string" ? t.from_account : undefined,
-              to_account:
-                typeof t.to_account === "string" ? t.to_account : undefined,
-              date: is_valid_date ? t.date : undefined,
-              note: typeof t.note === "string" ? t.note : undefined,
-            };
-          }
-
           return {
             amount: t.amount,
             transaction_type: t.transaction_type,
@@ -384,6 +346,10 @@ export async function infer_action(
               typeof t.funding_account === "string"
                 ? t.funding_account
                 : undefined,
+            from_account:
+              typeof t.from_account === "string" ? t.from_account : undefined,
+            to_account:
+              typeof t.to_account === "string" ? t.to_account : undefined,
           };
         });
 
@@ -433,26 +399,41 @@ export async function infer_action(
       }
     }
 
-    if (parsed.action === "update_last_expense_category" && parsed.args) {
+    if (parsed.action === "get_uncategorized_transactions") {
+      return {
+        action: "get_uncategorized_transactions",
+        args: {},
+      };
+    }
+
+    if (parsed.action === "get_categories") {
+      return {
+        action: "get_categories",
+        args: {},
+      };
+    }
+
+    if (parsed.action === "update_transaction_category" && parsed.args) {
       const a = parsed.args;
-      if (typeof a.category === "string" && a.category.length > 0) {
+      if (
+        typeof a.expense_id === "string" &&
+        typeof a.category === "string" &&
+        a.category.length > 0
+      ) {
         return {
-          action: "update_last_expense_category",
+          action: "update_transaction_category",
           args: {
+            expense_id: a.expense_id,
             category: a.category,
           },
         };
       }
     }
 
-    if (parsed.action === "get_uncategorized_expenses") {
-      return {
-        action: "get_uncategorized_expenses",
-        args: {},
-      };
-    }
-
-    if (parsed.action === "update_expense_category_batch" && parsed.args) {
+    if (
+      parsed.action === "update_transaction_categories_batch" &&
+      parsed.args
+    ) {
       const a = parsed.args;
       if (Array.isArray(a.updates) && a.updates.length > 0) {
         const valid_updates = a.updates.filter(
@@ -461,31 +442,10 @@ export async function infer_action(
         );
         if (valid_updates.length > 0) {
           return {
-            action: "update_expense_category_batch",
+            action: "update_transaction_categories_batch",
             args: { updates: valid_updates },
           };
         }
-      }
-    }
-
-    if (parsed.action === "create_payment" && parsed.args) {
-      const a = parsed.args;
-      if (typeof a.amount === "number" && a.amount > 0) {
-        const is_valid_date =
-          typeof a.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(a.date);
-
-        return {
-          action: "create_payment",
-          args: {
-            amount: a.amount,
-            from_account:
-              typeof a.from_account === "string" ? a.from_account : undefined,
-            to_account:
-              typeof a.to_account === "string" ? a.to_account : undefined,
-            date: is_valid_date ? a.date : undefined,
-            note: typeof a.note === "string" ? a.note : undefined,
-          },
-        };
       }
     }
 

@@ -1,25 +1,26 @@
 // src/mcp/server.ts
 import express, { Request, Response } from "express";
-import crypto from "crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 
+import { ACCOUNTS, FUNDING_ACCOUNTS, CREDIT_CARD_ACCOUNTS } from "./constants";
+
 import {
   add_transaction,
+  add_transactions_batch,
   add_transaction_input,
-  transaction_type,
 } from "./services/transactions";
 
 import { set_budget_rule, split_paycheck } from "./services/budgets";
 
 import {
-  update_last_expense_category,
-  get_uncategorized_expenses,
-  update_expense_category,
+  get_uncategorized_transactions,
+  update_transaction_category,
+  update_transaction_categories_batch,
 } from "./services/categories";
 
-import { create_payment } from "./services/payments";
+import { get_available_categories } from "./notion/utils";
 
 const server = new McpServer({
   name: "jarvis",
@@ -27,78 +28,34 @@ const server = new McpServer({
 });
 
 /* ──────────────────────────────
- * Helpers
- * ────────────────────────────── */
-
-function omit_undefined<T extends Record<string, any>>(obj: T): Partial<T> {
-  const out: Record<string, any> = {};
-  for (const [k, v] of Object.entries(obj)) {
-    if (v !== undefined) out[k] = v;
-  }
-  return out as Partial<T>;
-}
-
-/* ──────────────────────────────
  * Schemas
  * ────────────────────────────── */
 
-// add_transaction supports ONLY expense/income
-const transaction_type_values: [
-  Exclude<transaction_type, "payment">,
-  Exclude<transaction_type, "payment">
-] = ["expense", "income"];
+const account_enum = z.enum(ACCOUNTS);
+const funding_account_enum = z.enum(FUNDING_ACCOUNTS);
+const cc_account_enum = z.enum(CREDIT_CARD_ACCOUNTS);
 
-const account_enum = z.enum([
-  "checkings",
-  "short term savings",
-  "bills",
-  "freedom unlimited",
-  "sapphire",
-  "brokerage",
-  "roth ira",
-  "spaxx",
-]);
+const transaction_type_enum = z.enum(["expense", "income", "payment"]);
 
-const funding_account_enum = z.enum([
-  "checkings",
-  "bills",
-  "short term savings",
-]);
-const cc_account_enum = z.enum(["sapphire", "freedom unlimited"]);
-
+// Unified add_transaction schema - handles expense, income, and payment
 const add_transaction_schema = z.object({
   amount: z.number().positive(),
-  transaction_type: z.enum(transaction_type_values),
+  transaction_type: transaction_type_enum,
   account: account_enum.optional(),
   category: z.string().optional(),
   date: z.string().optional(), // YYYY-MM-DD
   note: z.string().optional(),
   funding_account: funding_account_enum.optional(),
-
-  // income fields (optional)
+  // Payment-specific fields
+  from_account: funding_account_enum.optional(),
+  to_account: cc_account_enum.optional(),
+  // Income fields (optional)
   pre_breakdown: z.number().optional(),
   budget: z.string().optional(),
 });
 
-// Payment schema (batch/stmts; routed to create_payment)
-const payment_schema = z.object({
-  amount: z.number().positive(),
-  transaction_type: z.literal("payment"),
-  from_account: funding_account_enum.optional(),
-  to_account: cc_account_enum.optional(),
-  date: z.string().optional(),
-  note: z.string().optional(),
-});
-
-const statement_transaction_schema = z.discriminatedUnion("transaction_type", [
-  add_transaction_schema,
-  payment_schema,
-]);
-
-type routed_tx = z.infer<typeof statement_transaction_schema>;
-
 const add_transactions_batch_schema = z.object({
-  transactions: z.array(statement_transaction_schema).min(1),
+  transactions: z.array(add_transaction_schema).min(1),
 });
 
 const set_budget_rule_schema = z.object({
@@ -120,16 +77,12 @@ const split_paycheck_schema = z.object({
   description: z.string().optional(),
 });
 
-const update_last_expense_category_schema = z.object({
-  category: z.string(),
-});
-
-const update_expense_category_schema = z.object({
+const update_category_schema = z.object({
   expense_id: z.string(),
   category: z.string(),
 });
 
-const update_expense_category_batch_schema = z.object({
+const update_categories_batch_schema = z.object({
   updates: z
     .array(
       z.object({
@@ -140,85 +93,16 @@ const update_expense_category_batch_schema = z.object({
     .min(1),
 });
 
-const create_payment_schema = z.object({
-  amount: z.number().positive(),
-  from_account: funding_account_enum.optional(),
-  to_account: cc_account_enum.optional(),
-  date: z.string().optional(),
-  note: z.string().optional(),
-});
-
 /* ──────────────────────────────
- * Shared helper: routes batch items correctly
- * ────────────────────────────── */
-
-type batch_item_result = {
-  index: number;
-  success: boolean;
-  transaction_id?: string;
-  message?: string;
-  error?: string;
-};
-
-async function process_transactions_batch(
-  transactions: routed_tx[]
-): Promise<batch_item_result[]> {
-  const results: batch_item_result[] = [];
-
-  for (const [index, tx] of transactions.entries()) {
-    try {
-      if (tx.transaction_type === "payment") {
-        const pay_res = await create_payment({
-          amount: tx.amount,
-          from_account: tx.from_account,
-          to_account: tx.to_account,
-          date: tx.date,
-          note: tx.note,
-        });
-
-        results.push(
-          omit_undefined({
-            index,
-            success: pay_res.success,
-            transaction_id: pay_res.payment_id,
-            message: pay_res.message,
-            error: pay_res.error,
-          }) as batch_item_result
-        );
-      } else {
-        const tx_res = await add_transaction(tx as add_transaction_input);
-
-        results.push(
-          omit_undefined({
-            index,
-            success: tx_res.success,
-            transaction_id: tx_res.transactionId,
-            message: tx_res.message,
-            error: tx_res.error,
-          }) as batch_item_result
-        );
-      }
-    } catch (err: any) {
-      results.push({
-        index,
-        success: false,
-        error: err?.message ?? "unknown error while processing batch item.",
-      });
-    }
-  }
-
-  return results;
-}
-
-/* ──────────────────────────────
- * Tools: base CRUD
+ * Tools: Transactions
  * ────────────────────────────── */
 
 server.registerTool(
   "add_transaction",
   {
     title: "add a transaction",
-    description: "Add an income or expense to Notion (no payments here).",
+    description:
+      "Add an expense, income, or payment to Notion. Payments also auto-clear matching expenses.",
     inputSchema: add_transaction_schema,
   },
   async (args) => {
@@ -243,14 +127,21 @@ server.registerTool(
       };
     }
 
+    const structured: any = {
+      transaction_id: result.transaction_id,
+      amount: parsed.amount,
+      transaction_type: parsed.transaction_type,
+    };
+
+    // Add payment-specific fields if present
+    if (result.cleared_expenses) {
+      structured.cleared_expenses = result.cleared_expenses;
+      structured.cleared_total = result.cleared_total;
+      structured.remaining_unapplied = result.remaining_unapplied;
+    }
+
     return {
-      structuredContent: {
-        transactionId: result.transactionId,
-        amount: parsed.amount,
-        transaction_type: parsed.transaction_type,
-        account: parsed.account ?? "(default)",
-        category: parsed.category ?? "other",
-      },
+      structuredContent: structured,
       content: [{ type: "text", text: result.message ?? "Transaction added." }],
       _meta: {},
     };
@@ -262,7 +153,7 @@ server.registerTool(
   {
     title: "add multiple transactions",
     description:
-      "Batch add expense/income and also payments. Payments are routed to create_payment and WILL write to Payments DB.",
+      "Batch add expense/income/payment transactions. All types are handled uniformly.",
     inputSchema: add_transactions_batch_schema,
   },
   async (args) => {
@@ -273,22 +164,26 @@ server.registerTool(
     );
 
     const parsed = add_transactions_batch_schema.parse(args);
-    const results = await process_transactions_batch(parsed.transactions);
-
-    const success_count = results.filter((r) => r.success).length;
+    const result = await add_transactions_batch({
+      transactions: parsed.transactions as add_transaction_input[],
+    });
 
     return {
-      structuredContent: { results },
+      structuredContent: { results: result.results },
       content: [
         {
           type: "text",
-          text: `Processed ${results.length} transactions in batch. ${success_count} succeeded.`,
+          text: `Processed ${result.results.length} transactions in batch. ${result.success_count} succeeded.`,
         },
       ],
       _meta: {},
     };
   }
 );
+
+/* ──────────────────────────────
+ * Tools: Budgets
+ * ────────────────────────────── */
 
 server.registerTool(
   "set_budget_rule",
@@ -366,52 +261,23 @@ server.registerTool(
   }
 );
 
-server.registerTool(
-  "update_last_expense_category",
-  {
-    title: "update last expense category",
-    description: "Update category of most recent expense.",
-    inputSchema: update_last_expense_category_schema,
-  },
-  async (args) => {
-    console.log(
-      "[MCP] update_last_expense_category called",
-      new Date().toISOString(),
-      JSON.stringify(args)
-    );
-
-    const parsed = update_last_expense_category_schema.parse(args);
-    const result = await update_last_expense_category(parsed);
-
-    if (!result.success) {
-      return {
-        content: [{ type: "text", text: `Failed: ${result.error}` }],
-        isError: true,
-      };
-    }
-
-    return {
-      content: [
-        { type: "text", text: `Updated last expense to "${result.category}".` },
-      ],
-      _meta: {},
-    };
-  }
-);
+/* ──────────────────────────────
+ * Tools: Categories
+ * ────────────────────────────── */
 
 server.registerTool(
-  "get_uncategorized_expenses",
+  "get_uncategorized_transactions",
   {
-    title: "get uncategorized expenses",
+    title: "get uncategorized transactions",
     description: 'Returns expenses with category "other" (the inbox).',
     inputSchema: z.object({}),
   },
   async () => {
     console.log(
-      "[MCP] get_uncategorized_expenses called",
+      "[MCP] get_uncategorized_transactions called",
       new Date().toISOString()
     );
-    const result = await get_uncategorized_expenses();
+    const result = await get_uncategorized_transactions();
 
     if (!result.success) {
       return {
@@ -436,21 +302,47 @@ server.registerTool(
 );
 
 server.registerTool(
-  "update_expense_category",
+  "get_categories",
   {
-    title: "update expense category",
+    title: "get available categories",
+    description:
+      "Returns the list of valid expense categories. Use this to validate category input.",
+    inputSchema: z.object({}),
+  },
+  async () => {
+    console.log("[MCP] get_categories called", new Date().toISOString());
+
+    const categories = await get_available_categories();
+
+    return {
+      structuredContent: { categories },
+      content: [
+        {
+          type: "text",
+          text: `Available categories: ${categories.join(", ")}`,
+        },
+      ],
+      _meta: {},
+    };
+  }
+);
+
+server.registerTool(
+  "update_transaction_category",
+  {
+    title: "update transaction category",
     description: "Update category of one expense by ID.",
-    inputSchema: update_expense_category_schema,
+    inputSchema: update_category_schema,
   },
   async (args) => {
     console.log(
-      "[MCP] update_expense_category called",
+      "[MCP] update_transaction_category called",
       new Date().toISOString(),
       JSON.stringify(args)
     );
 
-    const parsed = update_expense_category_schema.parse(args);
-    const result = await update_expense_category(parsed);
+    const parsed = update_category_schema.parse(args);
+    const result = await update_transaction_category(parsed);
 
     if (!result.success) {
       return {
@@ -469,97 +361,30 @@ server.registerTool(
 );
 
 server.registerTool(
-  "update_expense_category_batch",
+  "update_transaction_categories_batch",
   {
-    title: "update expense category batch",
+    title: "update transaction categories batch",
     description: "Update categories for multiple expenses at once.",
-    inputSchema: update_expense_category_batch_schema,
+    inputSchema: update_categories_batch_schema,
   },
   async (args) => {
     console.log(
-      "[MCP] update_expense_category_batch called",
+      "[MCP] update_transaction_categories_batch called",
       new Date().toISOString(),
       JSON.stringify(args)
     );
 
-    const parsed = update_expense_category_batch_schema.parse(args);
-
-    const results: Array<{
-      expense_id: string;
-      category: string;
-      ok: boolean;
-      error?: string;
-    }> = [];
-
-    for (const u of parsed.updates) {
-      try {
-        const res = await update_expense_category({
-          expense_id: u.expense_id,
-          category: u.category,
-        });
-        results.push({
-          expense_id: u.expense_id,
-          category: u.category,
-          ok: !!res.success,
-        });
-      } catch (e: any) {
-        results.push({
-          expense_id: u.expense_id,
-          category: u.category,
-          ok: false,
-          error: e?.message ?? String(e),
-        });
-      }
-    }
-
-    const success_count = results.filter((r) => r.ok).length;
+    const parsed = update_categories_batch_schema.parse(args);
+    const result = await update_transaction_categories_batch(parsed);
 
     return {
-      structuredContent: { results },
+      structuredContent: { results: result.results },
       content: [
         {
           type: "text",
-          text: `Applied ${success_count}/${results.length} category update(s).`,
+          text: `Applied ${result.success_count}/${result.results.length} category update(s).`,
         },
       ],
-      _meta: {},
-    };
-  }
-);
-
-server.registerTool(
-  "create_payment",
-  {
-    title: "create payment",
-    description:
-      "Create a payment record (transfer) and auto-clear matching expenses.",
-    inputSchema: create_payment_schema,
-  },
-  async (args) => {
-    console.log(
-      "[MCP] create_payment called",
-      new Date().toISOString(),
-      JSON.stringify(args)
-    );
-
-    const parsed = create_payment_schema.parse(args);
-    const result = await create_payment(parsed);
-
-    if (!result.success) {
-      return {
-        content: [{ type: "text", text: `Failed: ${result.error}` }],
-        isError: true,
-      };
-    }
-
-    return {
-      structuredContent: {
-        payment_id: result.payment_id,
-        cleared_expenses: result.cleared_expenses,
-        cleared_total: result.cleared_total,
-        remaining_unapplied: result.remaining_unapplied,
-      },
-      content: [{ type: "text", text: result.message ?? "Payment created." }],
       _meta: {},
     };
   }

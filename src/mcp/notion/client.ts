@@ -1,4 +1,4 @@
-// src/notion_client.ts
+// src/mcp/notion/client.ts
 import "dotenv/config";
 import { Client } from "@notionhq/client";
 

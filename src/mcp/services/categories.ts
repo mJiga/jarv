@@ -1,118 +1,49 @@
-// src/services/categories.ts
+// src/mcp/services/categories.ts
 import { notion, EXPENSES_DB_ID, CATEGORIES_DB_ID } from "../notion/client";
 import {
   ensure_category_page,
   get_data_source_id_for_database,
+  validate_category,
 } from "../notion/utils";
 
 /* ──────────────────────────────
  * Types
  * ────────────────────────────── */
 
-export interface update_last_expense_category_input {
-  category: string; // e.g. "groceries", "out", "subscriptions"
-}
-
-export interface update_last_expense_category_result {
-  success: boolean;
-  expense_id?: string | undefined;
-  category?: string | undefined;
-  error?: string | undefined;
-}
-
-export interface uncategorized_expense {
+export interface uncategorized_transaction {
   id: string;
   amount: number;
   note: string;
   date: string;
 }
 
-export interface get_uncategorized_expenses_result {
+export interface get_uncategorized_transactions_result {
   success: boolean;
-  expenses?: uncategorized_expense[] | undefined;
+  expenses?: uncategorized_transaction[] | undefined;
   error?: string | undefined;
 }
 
-export interface update_expense_category_input {
+export interface update_transaction_category_input {
   expense_id: string;
   category: string;
 }
 
-export interface update_expense_category_result {
+export interface update_transaction_category_result {
   success: boolean;
   expense_id?: string | undefined;
   category?: string | undefined;
   error?: string | undefined;
 }
 
-/**
- * Update the category of the most recently added expense.
- * Queries the Expenses DB sorted by created_time descending and updates the first result.
- */
-export async function update_last_expense_category(
-  input: update_last_expense_category_input
-): Promise<update_last_expense_category_result> {
-  try {
-    // Query for the most recent expense using Data Sources API (Notion SDK v5)
-    const data_source_id = await get_data_source_id_for_database(
-      EXPENSES_DB_ID
-    );
-
-    const response = await (notion as any).dataSources.query({
-      data_source_id,
-      sorts: [
-        {
-          timestamp: "created_time",
-          direction: "descending",
-        },
-      ],
-      page_size: 1,
-    });
-
-    if (!response.results || response.results.length === 0) {
-      return {
-        success: false,
-        error: "No expenses found in the database.",
-      };
-    }
-
-    const last_expense = response.results[0];
-    const expense_id = last_expense.id;
-
-    const category_page_id = await ensure_category_page(input.category);
-
-    await notion.pages.update({
-      page_id: expense_id,
-      properties: {
-        categories: {
-          relation: [{ id: category_page_id }],
-        },
-      },
-    });
-
-    return {
-      success: true,
-      expense_id,
-      category: input.category,
-    };
-  } catch (err: any) {
-    console.error("error updating last expense category:", err);
-    return {
-      success: false,
-      error: err?.message || "unknown error updating last expense category.",
-    };
-  }
-}
-
 /* ──────────────────────────────
- * get_uncategorized_expenses
+ * get_uncategorized_transactions
  * ────────────────────────────── */
 
 /**
  * Returns all expenses that have category "other" — the inbox.
  * Agent can use this to review and re-categorize them.
  */
-export async function get_uncategorized_expenses(): Promise<get_uncategorized_expenses_result> {
+export async function get_uncategorized_transactions(): Promise<get_uncategorized_transactions_result> {
   try {
     // First, find the "other" category page id
     const categories_ds_id = await get_data_source_id_for_database(
@@ -147,7 +78,7 @@ export async function get_uncategorized_expenses(): Promise<get_uncategorized_ex
       page_size: 50, // reasonable limit
     });
 
-    const expenses: uncategorized_expense[] = (response.results || []).map(
+    const expenses: uncategorized_transaction[] = (response.results || []).map(
       (page: any) => {
         const props = page.properties;
 
@@ -170,26 +101,29 @@ export async function get_uncategorized_expenses(): Promise<get_uncategorized_ex
 
     return { success: true, expenses };
   } catch (err: any) {
-    console.error("error getting uncategorized expenses:", err);
+    console.error("error getting uncategorized transactions:", err);
     return {
       success: false,
-      error: err?.message || "unknown error getting uncategorized expenses.",
+      error: err?.message || "unknown error getting uncategorized transactions.",
     };
   }
 }
 
 /* ──────────────────────────────
- * update_expense_category
+ * update_transaction_category
  * ────────────────────────────── */
 
 /**
  * Update a specific expense's category by its page ID.
  */
-export async function update_expense_category(
-  input: update_expense_category_input
-): Promise<update_expense_category_result> {
+export async function update_transaction_category(
+  input: update_transaction_category_input
+): Promise<update_transaction_category_result> {
   try {
-    const category_page_id = await ensure_category_page(input.category);
+    // Validate category - force "other" if invalid
+    const validated_category = validate_category(input.category);
+
+    const category_page_id = await ensure_category_page(validated_category);
 
     await notion.pages.update({
       page_id: input.expense_id,
@@ -203,13 +137,76 @@ export async function update_expense_category(
     return {
       success: true,
       expense_id: input.expense_id,
-      category: input.category,
+      category: validated_category,
     };
   } catch (err: any) {
-    console.error("error updating expense category:", err);
+    console.error("error updating transaction category:", err);
     return {
       success: false,
-      error: err?.message || "unknown error updating expense category.",
+      error: err?.message || "unknown error updating transaction category.",
     };
   }
+}
+
+/* ──────────────────────────────
+ * update_transaction_categories_batch
+ * ────────────────────────────── */
+
+export interface update_transaction_categories_batch_input {
+  updates: Array<{
+    expense_id: string;
+    category: string;
+  }>;
+}
+
+export interface batch_category_result {
+  expense_id: string;
+  category: string;
+  success: boolean;
+  error?: string | undefined;
+}
+
+export interface update_transaction_categories_batch_result {
+  success: boolean;
+  results: batch_category_result[];
+  success_count: number;
+}
+
+/**
+ * Update categories for multiple expenses at once.
+ */
+export async function update_transaction_categories_batch(
+  input: update_transaction_categories_batch_input
+): Promise<update_transaction_categories_batch_result> {
+  const results: batch_category_result[] = [];
+
+  for (const update of input.updates) {
+    try {
+      const res = await update_transaction_category({
+        expense_id: update.expense_id,
+        category: update.category,
+      });
+      results.push({
+        expense_id: update.expense_id,
+        category: update.category,
+        success: !!res.success,
+        error: res.error,
+      });
+    } catch (err: any) {
+      results.push({
+        expense_id: update.expense_id,
+        category: update.category,
+        success: false,
+        error: err?.message ?? String(err),
+      });
+    }
+  }
+
+  const success_count = results.filter((r) => r.success).length;
+
+  return {
+    success: success_count > 0,
+    results,
+    success_count,
+  };
 }

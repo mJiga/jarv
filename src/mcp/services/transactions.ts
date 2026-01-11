@@ -1,4 +1,4 @@
-// src/services/transactions.ts
+// src/mcp/services/transactions.ts
 import { notion, EXPENSES_DB_ID, INCOME_DB_ID } from "../notion/client";
 
 import {
@@ -7,14 +7,28 @@ import {
   find_budget_rule_pages_by_title,
   transaction_type,
   income_db_fields,
+  validate_category,
 } from "../notion/utils";
+
+import {
+  ACCOUNTS,
+  FUNDING_ACCOUNTS,
+  is_valid_account,
+  is_valid_funding_account,
+  is_valid_credit_card_account,
+} from "../constants";
+
+import {
+  create_payment,
+  create_payment_result,
+  cleared_expense_info,
+} from "./payments";
 
 export type { transaction_type, income_db_fields };
 
 /**
  * Input payload for add_transaction.
- * For incomes, this overlaps with income_db_fields; for expenses, some
- * properties (pre_breakdown, budget) are unused.
+ * Handles expense, income, AND payment types.
  */
 export interface add_transaction_input extends Partial<income_db_fields> {
   amount: number;
@@ -23,35 +37,22 @@ export interface add_transaction_input extends Partial<income_db_fields> {
   date?: string | undefined;
   category?: string | undefined;
   note?: string | undefined;
-  funding_account?: string | undefined; // For credit card expenses: which account funds this (checkings, bills)
+  funding_account?: string | undefined; // For credit card expenses: which account funds this
+  // Payment-specific fields
+  from_account?: string | undefined; // For payments: source account (checkings, bills)
+  to_account?: string | undefined; // For payments: destination credit card (sapphire, freedom unlimited)
 }
 
 export interface add_transaction_result {
   success: boolean;
-  transactionId?: string;
-  message?: string;
-  error?: string;
+  transaction_id?: string | undefined;
+  message?: string | undefined;
+  error?: string | undefined;
+  // Payment-specific results
+  cleared_expenses?: cleared_expense_info[] | undefined;
+  cleared_total?: number | undefined;
+  remaining_unapplied?: number | undefined;
 }
-
-// If Gemini sends anything else, we force it to "other".
-const ACCEPTED_CATEGORIES = [
-  "paycheck",
-  "out",
-  "lyft",
-  "shopping",
-  "concerts",
-  "zelle",
-  "health",
-  "groceries",
-  "att",
-  "chatgpt",
-  "house",
-  "car",
-  "gas",
-  "other",
-] as const;
-
-type AcceptedCategory = (typeof ACCEPTED_CATEGORIES)[number];
 
 function build_title(input: add_transaction_input): string {
   const is_expense = input.transaction_type === "expense";
@@ -82,11 +83,34 @@ export async function add_transaction(
 
     if (
       input.transaction_type !== "expense" &&
-      input.transaction_type !== "income"
+      input.transaction_type !== "income" &&
+      input.transaction_type !== "payment"
     ) {
       return {
         success: false,
-        error: "transaction_type must be 'expense' or 'income'.",
+        error: "transaction_type must be 'expense', 'income', or 'payment'.",
+      };
+    }
+
+    // Handle payments separately
+    if (input.transaction_type === "payment") {
+      const payment_result = await create_payment({
+        amount: input.amount,
+        from_account: input.from_account,
+        to_account: input.to_account,
+        date: input.date,
+        note: input.note,
+        category: input.category,
+      });
+
+      return {
+        success: payment_result.success,
+        transaction_id: payment_result.payment_id,
+        message: payment_result.message,
+        error: payment_result.error,
+        cleared_expenses: payment_result.cleared_expenses,
+        cleared_total: payment_result.cleared_total,
+        remaining_unapplied: payment_result.remaining_unapplied,
       };
     }
 
@@ -97,31 +121,13 @@ export async function add_transaction(
 
     // ✅ Enforce accepted categories so Gemini can't introduce new ones.
     // Unknown/blank categories get forced to "other".
-    const raw_category = (input.category ?? "").trim().toLowerCase();
-
-    const category_name: AcceptedCategory = (
-      ACCEPTED_CATEGORIES as readonly string[]
-    ).includes(raw_category)
-      ? (raw_category as AcceptedCategory)
-      : "other";
+    const category_name = validate_category(input.category ?? "");
 
     // allowed accounts guard
-    const allowed_accounts = [
-      "checkings",
-      "short term savings",
-      "bills",
-      "freedom unlimited",
-      "sapphire",
-      "brokerage",
-      "roth ira",
-      "spaxx",
-    ] as const;
-
-    if (!allowed_accounts.includes(account_name as any)) {
+    if (!is_valid_account(account_name)) {
       return {
         success: false,
-        error:
-          "account must be one of: checkings, short term savings, bills, freedom unlimited, sapphire, brokerage, roth ira, spaxx.",
+        error: `account must be one of: ${ACCOUNTS.join(", ")}.`,
       };
     }
 
@@ -139,8 +145,7 @@ export async function add_transaction(
     const category_page_id = await ensure_category_page(category_name);
 
     // Credit card accounts that need funding
-    const credit_card_accounts = ["sapphire", "freedom unlimited"] as const;
-    const is_credit_card = credit_card_accounts.includes(account_name as any);
+    const is_credit_card = is_valid_credit_card_account(account_name);
 
     // Determine funding account for credit card expenses
     let funding_account_name: string | null = null;
@@ -150,16 +155,12 @@ export async function add_transaction(
       funding_account_name = input.funding_account || "checkings";
 
       // Validate funding account
-      const allowed_funding = [
-        "checkings",
-        "bills",
-        "short term savings",
-      ] as const;
-      if (!allowed_funding.includes(funding_account_name as any)) {
+      if (!is_valid_funding_account(funding_account_name)) {
         return {
           success: false,
-          error:
-            "funding_account must be one of: checkings, bills, short term savings.",
+          error: `funding_account must be one of: ${FUNDING_ACCOUNTS.join(
+            ", "
+          )}.`,
         };
       }
 
@@ -298,7 +299,7 @@ export async function add_transaction(
 
     return {
       success: true,
-      transactionId: response.id,
+      transaction_id: response.id,
       message:
         input.transaction_type === "expense"
           ? `${base_msg} (category: ${category_name}).`
@@ -311,4 +312,65 @@ export async function add_transaction(
       error: err?.message || "unknown error while adding transaction.",
     };
   }
+}
+
+/* ──────────────────────────────
+ * Batch Transactions
+ * ────────────────────────────── */
+
+export interface batch_transaction_result {
+  index: number;
+  success: boolean;
+  transaction_id?: string | undefined;
+  message?: string | undefined;
+  error?: string | undefined;
+}
+
+export interface add_transactions_batch_input {
+  transactions: add_transaction_input[];
+}
+
+export interface add_transactions_batch_result {
+  success: boolean;
+  results: batch_transaction_result[];
+  success_count: number;
+  error?: string;
+}
+
+/**
+ * Process multiple transactions in batch.
+ * Each transaction can be expense, income, or payment.
+ */
+export async function add_transactions_batch(
+  input: add_transactions_batch_input
+): Promise<add_transactions_batch_result> {
+  const results: batch_transaction_result[] = [];
+
+  for (const [index, tx] of input.transactions.entries()) {
+    try {
+      const tx_result = await add_transaction(tx);
+
+      results.push({
+        index,
+        success: tx_result.success,
+        transaction_id: tx_result.transaction_id,
+        message: tx_result.message,
+        error: tx_result.error,
+      });
+    } catch (err: any) {
+      results.push({
+        index,
+        success: false,
+        error: err?.message ?? "unknown error while processing batch item.",
+      });
+    }
+  }
+
+  const success_count = results.filter((r) => r.success).length;
+
+  return {
+    success: success_count > 0,
+    results,
+    success_count,
+  };
 }

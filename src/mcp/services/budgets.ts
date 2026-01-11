@@ -1,4 +1,4 @@
-// src/services/budgets.ts
+// src/mcp/services/budgets.ts
 import { notion, BUDGET_RULES_DB_ID } from "../notion/client";
 import {
   find_budget_rule_pages_by_title,
@@ -221,7 +221,7 @@ export async function split_paycheck(
         pre_breakdown: gross_amount,
         percentage,
         portion,
-        transaction_id: tx_result.transactionId,
+        transaction_id: tx_result.transaction_id,
         error: tx_result.error,
       });
     }

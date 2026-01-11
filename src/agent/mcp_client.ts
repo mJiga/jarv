@@ -4,10 +4,6 @@ import crypto from "crypto";
 
 const MCP_BASE_URL = process.env.MCP_BASE_URL ?? "http://localhost:3000";
 
-if (!MCP_BASE_URL) {
-  throw new Error("MCP_BASE_URL is not set in .env");
-}
-
 export interface add_transaction_args {
   amount: number;
   transaction_type: "expense" | "income" | "payment";
@@ -23,10 +19,13 @@ export interface add_transaction_args {
   category?: string;
   date?: string;
   note?: string;
-
-  // Payment-only fields
+  funding_account?: "checkings" | "bills" | "short term savings";
+  // Payment-specific fields
   from_account?: "checkings" | "bills" | "short term savings";
   to_account?: "sapphire" | "freedom unlimited";
+  // Income-specific fields
+  pre_breakdown?: number;
+  budget?: string;
 }
 
 export interface add_transaction_batch_args {
@@ -46,6 +45,18 @@ export interface split_paycheck_args {
   budget_name?: string;
   date?: string;
   description?: string;
+}
+
+export interface update_transaction_category_args {
+  expense_id: string;
+  category: string;
+}
+
+export interface update_transaction_categories_batch_args {
+  updates: Array<{
+    expense_id: string;
+    category: string;
+  }>;
 }
 
 async function call_mcp_tool<T extends object>(
@@ -116,6 +127,10 @@ async function call_mcp_tool<T extends object>(
   return { raw: data, message: text_result as string };
 }
 
+/* ──────────────────────────────
+ * Transactions
+ * ────────────────────────────── */
+
 export async function call_add_transaction_tool(args: add_transaction_args) {
   return call_mcp_tool(
     "add_transaction",
@@ -134,6 +149,10 @@ export async function call_add_transaction_batch_tool(
   );
 }
 
+/* ──────────────────────────────
+ * Budgets
+ * ────────────────────────────── */
+
 export async function call_set_budget_rule_tool(args: set_budget_rule_args) {
   return call_mcp_tool(
     "set_budget_rule",
@@ -150,60 +169,38 @@ export async function call_split_paycheck_tool(args: split_paycheck_args) {
   );
 }
 
-export interface update_last_expense_category_args {
-  category: string;
-}
-export async function call_update_last_expense_category_tool(
-  args: update_last_expense_category_args
-) {
+/* ──────────────────────────────
+ * Categories
+ * ────────────────────────────── */
+
+export async function call_get_uncategorized_transactions_tool() {
   return call_mcp_tool(
-    "update_last_expense_category",
-    args,
-    "Category updated, but no detailed message."
-  );
-}
-export async function call_get_uncategorized_expenses_tool() {
-  return call_mcp_tool(
-    "get_uncategorized_expenses",
+    "get_uncategorized_transactions",
     {},
-    "Retrieved uncategorized expenses."
+    "Retrieved uncategorized transactions."
   );
 }
-export interface update_expense_category_args {
-  expense_id: string;
-  category: string;
+
+export async function call_get_categories_tool() {
+  return call_mcp_tool("get_categories", {}, "Retrieved available categories.");
 }
-export async function call_update_expense_category_tool(
-  args: update_expense_category_args
+
+export async function call_update_transaction_category_tool(
+  args: update_transaction_category_args
 ) {
   return call_mcp_tool(
-    "update_expense_category",
+    "update_transaction_category",
     args,
-    "Expense category updated."
+    "Transaction category updated."
   );
 }
-export interface update_expense_category_batch_args {
-  updates: Array<{
-    expense_id: string;
-    category: string;
-  }>;
-}
-export async function call_update_expense_category_batch_tool(
-  args: update_expense_category_batch_args
+
+export async function call_update_transaction_categories_batch_tool(
+  args: update_transaction_categories_batch_args
 ) {
   return call_mcp_tool(
-    "update_expense_category_batch",
+    "update_transaction_categories_batch",
     args,
-    "Batch category updates applied."
+    "Batch transaction category updates applied."
   );
-}
-export interface create_payment_args {
-  amount: number;
-  from_account?: "checkings" | "bills" | "short term savings";
-  to_account?: "sapphire" | "freedom unlimited";
-  date?: string;
-  note?: string;
-}
-export async function call_create_payment_tool(args: create_payment_args) {
-  return call_mcp_tool("create_payment", args, "Payment created.");
 }

@@ -4,7 +4,6 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "ts-node-dev --respawn src/mcp/test_services.ts",
     "mcp": "ts-node-dev --respawn src/mcp/server.ts",
     "agent": "ts-node-dev --respawn src/agent/agent_server.ts"
   },

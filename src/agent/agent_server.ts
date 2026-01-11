@@ -7,12 +7,11 @@ import {
   call_add_transaction_tool,
   call_set_budget_rule_tool,
   call_split_paycheck_tool,
-  call_update_last_expense_category_tool,
-  call_update_expense_category_tool,
-  call_update_expense_category_batch_tool,
-  call_create_payment_tool,
+  call_get_uncategorized_transactions_tool,
+  call_get_categories_tool,
+  call_update_transaction_category_tool,
+  call_update_transaction_categories_batch_tool,
 } from "./mcp_client";
-import { run_inbox_cleanup } from "./flows/inbox_cleanup";
 
 const PORT = Number(process.env.AGENT_PORT ?? 4000);
 
@@ -64,29 +63,22 @@ app.post("/chat", async (req: Request, res: Response) => {
         mcp_result = await call_split_paycheck_tool(action.args);
         break;
 
-      case "update_last_expense_category":
-        mcp_result = await call_update_last_expense_category_tool(action.args);
+      case "get_uncategorized_transactions":
+        mcp_result = await call_get_uncategorized_transactions_tool();
         break;
 
-      case "get_uncategorized_expenses": {
-        // Runs inbox cleanup flow: get expenses → categorize → apply directly
-        const result = await run_inbox_cleanup();
-        return res.json({
-          reply: result.message,
-          meta: { action, ...result },
-        });
-      }
-
-      case "update_expense_category":
-        mcp_result = await call_update_expense_category_tool(action.args);
+      case "get_categories":
+        mcp_result = await call_get_categories_tool();
         break;
 
-      case "update_expense_category_batch":
-        mcp_result = await call_update_expense_category_batch_tool(action.args);
+      case "update_transaction_category":
+        mcp_result = await call_update_transaction_category_tool(action.args);
         break;
 
-      case "create_payment":
-        mcp_result = await call_create_payment_tool(action.args);
+      case "update_transaction_categories_batch":
+        mcp_result = await call_update_transaction_categories_batch_tool(
+          action.args
+        );
         break;
 
       default:

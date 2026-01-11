@@ -1,10 +1,97 @@
-// src/notion/utils.ts
+// src/mcp/notion/utils.ts
 import {
   notion,
   ACCOUNTS_DB_ID,
   CATEGORIES_DB_ID,
   BUDGET_RULES_DB_ID,
 } from "./client";
+
+/* ──────────────────────────────
+ * Available Categories (fetched from Notion)
+ * ────────────────────────────── */
+
+// Fallback categories used if Notion fetch fails
+const FALLBACK_CATEGORIES = [
+  "paycheck",
+  "out",
+  "lyft",
+  "shopping",
+  "concerts",
+  "zelle",
+  "health",
+  "groceries",
+  "att",
+  "chatgpt",
+  "house",
+  "car",
+  "gas",
+  "other",
+] as const;
+
+// Cache for categories fetched from Notion
+let cached_categories: string[] | null = null;
+let cache_timestamp: number = 0;
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Fetches all category titles from the Notion Categories DB.
+ * Results are cached for 5 minutes to avoid excessive API calls.
+ */
+export async function get_available_categories(): Promise<string[]> {
+  const now = Date.now();
+
+  // Return cached value if still valid
+  if (cached_categories && now - cache_timestamp < CACHE_TTL_MS) {
+    return cached_categories;
+  }
+
+  try {
+    const data_source_id = await get_data_source_id_for_database(
+      CATEGORIES_DB_ID
+    );
+
+    const response = await (notion as any).dataSources.query({
+      data_source_id,
+      page_size: 100, // Should be plenty for categories
+    });
+
+    const categories: string[] = (response.results || [])
+      .map((page: any) => {
+        const title = page?.properties?.title?.title;
+        if (!Array.isArray(title) || title.length === 0) return null;
+        return (title[0]?.plain_text ?? "").trim().toLowerCase();
+      })
+      .filter((cat: string | null): cat is string => !!cat);
+
+    // Ensure "other" is always present as fallback
+    if (!categories.includes("other")) {
+      categories.push("other");
+    }
+
+    // Update cache
+    cached_categories = categories;
+    cache_timestamp = now;
+
+    return categories;
+  } catch (err) {
+    console.error("Error fetching categories from Notion:", err);
+    // Return cached value if available, otherwise fallback
+    return cached_categories ?? [...FALLBACK_CATEGORIES];
+  }
+}
+
+/**
+ * Validates a category string. Returns the category if valid, or "other" if not.
+ * Uses cached categories from get_available_categories().
+ */
+export function validate_category(category: string): string {
+  const normalized = (category ?? "").trim().toLowerCase();
+  const available: readonly string[] = cached_categories ?? FALLBACK_CATEGORIES;
+  if (available.includes(normalized)) {
+    return normalized;
+  }
+  return "other";
+}
 
 /**
  * Get the first data source id attached to a database.
@@ -138,8 +225,7 @@ export function get_page_title_text(page: any): string {
  * Shared Types
  * ────────────────────────────── */
 
-// NOTE: "payment" is supported for batch imports.
-// Payments are handled by the payments service (create_payment), not by add_transaction.
+// NOTE: "payment" is supported. add_transaction handles all types uniformly.
 export type transaction_type = "expense" | "income" | "payment";
 
 /**
