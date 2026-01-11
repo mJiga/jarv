@@ -1,37 +1,44 @@
 // src/agent/llm/gemini_client.ts
+// Gemini LLM client for parsing natural language into structured actions.
+// Outputs JSON matching MCP tool schemas. LLM-agnostic design allows swapping providers.
+
 import "dotenv/config";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import {
+  ACCOUNTS,
+  FUNDING_ACCOUNTS,
+  CREDIT_CARD_ACCOUNTS,
+  TRANSACTION_TYPES,
+  account_type,
+  funding_account_type,
+  credit_card_account_type,
+  transaction_type,
+} from "../../mcp/constants";
 
 if (!process.env.GEMINI_API_KEY) {
   throw new Error("GEMINI_API_KEY is not set in .env");
 }
 
 const gen_ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
 const model = gen_ai.getGenerativeModel({ model: "gemini-2.0-flash" });
+
+// -----------------------------------------------------------------------------
+// Action Types
+// -----------------------------------------------------------------------------
 
 export type parsed_action =
   | {
       action: "add_transaction";
       args: {
         amount: number;
-        transaction_type: "expense" | "income" | "payment";
-        account?:
-          | "checkings"
-          | "short term savings"
-          | "bills"
-          | "freedom unlimited"
-          | "sapphire"
-          | "brokerage"
-          | "roth ira"
-          | "spaxx";
+        transaction_type: transaction_type;
+        account?: account_type;
         category?: string;
         date?: string;
         note?: string;
-        funding_account?: "checkings" | "bills" | "short term savings";
-        // Payment-specific fields
-        from_account?: "checkings" | "bills" | "short term savings";
-        to_account?: "sapphire" | "freedom unlimited";
+        funding_account?: funding_account_type;
+        from_account?: funding_account_type;
+        to_account?: credit_card_account_type;
       };
     }
   | {
@@ -40,21 +47,13 @@ export type parsed_action =
         transactions: Array<{
           amount: number;
           transaction_type: "expense" | "income" | "payment";
-          account?:
-            | "checkings"
-            | "short term savings"
-            | "bills"
-            | "freedom unlimited"
-            | "sapphire"
-            | "brokerage"
-            | "roth ira"
-            | "spaxx";
+          account?: account_type;
           category?: string;
           date?: string;
           note?: string;
-          funding_account?: "checkings" | "bills" | "short term savings";
-          from_account?: "checkings" | "bills" | "short term savings";
-          to_account?: "sapphire" | "freedom unlimited";
+          funding_account?: funding_account_type;
+          from_account?: funding_account_type;
+          to_account?: credit_card_account_type;
         }>;
       };
     }
@@ -62,10 +61,7 @@ export type parsed_action =
       action: "set_budget_rule";
       args: {
         budget_name: string;
-        budgets: Array<{
-          account: string;
-          percentage: number;
-        }>;
+        budgets: Array<{ account: string; percentage: number }>;
       };
     }
   | {
@@ -77,44 +73,42 @@ export type parsed_action =
         description?: string;
       };
     }
-  | {
-      action: "get_uncategorized_transactions";
-      args: Record<string, never>;
-    }
-  | {
-      action: "get_categories";
-      args: Record<string, never>;
-    }
+  | { action: "get_uncategorized_transactions"; args: Record<string, never> }
+  | { action: "get_categories"; args: Record<string, never> }
   | {
       action: "update_transaction_category";
-      args: {
-        expense_id: string;
-        category: string;
-      };
+      args: { expense_id: string; category: string };
     }
   | {
       action: "update_transaction_categories_batch";
-      args: {
-        updates: Array<{
-          expense_id: string;
-          category: string;
-        }>;
-      };
+      args: { updates: Array<{ expense_id: string; category: string }> };
     }
-  | {
-      action: "unknown";
-      reason?: string;
-    };
+  | { action: "unknown"; reason?: string };
 
+// -----------------------------------------------------------------------------
+// Prompt Construction
+// -----------------------------------------------------------------------------
+
+/**
+ * Builds the system prompt for action inference.
+ * Uses global constants for account lists to stay in sync with MCP server.
+ */
 function build_prompt(user_message: string): string {
-  // Get current date for relative date calculations
   const today = new Date();
-  const today_str = today.toISOString().slice(0, 10); // YYYY-MM-DD
+  const today_str = today.toISOString().slice(0, 10);
 
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
   const yesterday_str = yesterday.toISOString().slice(0, 10);
-  const card_info = `CREDIT CARD LAST 4 DIGITS:\n- Sapphire: ${process.env.SAPPHIRE_LAST4}\n- Freedom Unlimited: ${process.env.FREEDOM_LAST4}`;
+
+  const card_info = `CREDIT CARD LAST 4 DIGITS:
+- Sapphire: ${process.env.SAPPHIRE_LAST4}
+- Freedom Unlimited: ${process.env.FREEDOM_LAST4}`;
+
+  // Build account lists from constants
+  const accounts_list = ACCOUNTS.join(", ");
+  const funding_accounts_list = FUNDING_ACCOUNTS.join(", ");
+  const cc_accounts_list = CREDIT_CARD_ACCOUNTS.join(", ");
 
   return `
 You are a finance command parser for my personal expense tracker.
@@ -123,11 +117,13 @@ CURRENT DATE: ${today_str}
 YESTERDAY: ${yesterday_str}
 CC LAST 4 DIGITS: ${card_info}
 
-CARD MATCHING RULES (IMPORTANT):
-- If the user message includes a 4-digit number that matches one of the CC LAST 4 DIGITS above, treat that as the card used.
-  * For expenses/income: set "account" to the matching card account ("sapphire" or "freedom unlimited") when appropriate.
-  * For credit card payments: set "to_account" to the matching card ("sapphire" or "freedom unlimited").
-- If both a card name and last-4 appear and they conflict, TRUST the last-4.
+VALID ACCOUNTS: ${accounts_list}
+VALID FUNDING ACCOUNTS: ${funding_accounts_list}
+VALID CREDIT CARDS: ${cc_accounts_list}
+
+CARD MATCHING RULES:
+- If the user message includes a 4-digit number matching CC LAST 4 above, use that card.
+- If both card name and last-4 appear and conflict, trust the last-4.
 
 Your ONLY job is to read the user's message and output STRICT JSON (no extra text).
 You can ONLY choose between these actions:
@@ -145,132 +141,72 @@ You can ONLY choose between these actions:
 
 JSON schema:
 
+add_transaction:
 {
   "action": "add_transaction",
   "args": {
     "amount": number,
     "transaction_type": "expense" | "income" | "payment",
-    // For expense/income:
-    "account": string,                // one of: "checkings", "short term savings", "bills", "freedom unlimited", "sapphire", "brokerage", "roth ira", "spaxx". Otherwise OMIT if not specified.
-    "category": string,               // Call get_categories MCP tool to see valid options. Common ones: "out" (eating out), "groceries", "lyft", "shopping", "zelle", "health", "car", "house". INFER from context - only use "other" if truly unclear.
-    "date": "YYYY-MM-DD",             // optional. For "yesterday" use YESTERDAY date above. For "today" or no date mentioned, OMIT this field.
-    "note": string,                   // optional but IMPORTANT: capture the FULL original description from the user.
-    "funding_account": "checkings" | "bills" | "short term savings",  // REQUIRED for credit card expenses.
-    // For payment:
-    "from_account": "checkings" | "bills" | "short term savings",     // optional, where the money comes from. Defaults to "checkings".
-    "to_account": "sapphire" | "freedom unlimited"                    // the credit card being paid. Defaults to "sapphire".
+    "account": one of [${accounts_list}] (optional),
+    "category": string (optional),
+    "date": "YYYY-MM-DD" (optional),
+    "note": string (optional),
+    "funding_account": one of [${funding_accounts_list}] (for CC expenses),
+    "from_account": one of [${funding_accounts_list}] (for payments),
+    "to_account": one of [${cc_accounts_list}] (for payments)
   }
 }
 
-OR:
-
+add_transaction_batch:
 {
   "action": "add_transaction_batch",
-  "args": {
-    "transactions": [
-      {
-        "amount": number,
-        "transaction_type": "expense" | "income" | "payment",
-        "account": string,          // optional, for expense/income
-        "category": string,         // optional, for expense/income
-        "date": "YYYY-MM-DD",       // optional
-        "note": string,             // optional
-        "funding_account": "checkings" | "bills" | "short term savings",  // for credit card expenses
-        "from_account": "checkings" | "bills" | "short term savings",     // for payments
-        "to_account": "sapphire" | "freedom unlimited"                    // for payments
-      }
-    ]
-  }
+  "args": { "transactions": [/* array of transaction objects */] }
 }
 
-OR:
-
+set_budget_rule:
 {
   "action": "set_budget_rule",
-  "args": {
-    "budget_name": string,
-    "budgets": [
-      { "account": string, "percentage": number }
-    ]
-  }
+  "args": { "budget_name": string, "budgets": [{ "account": string, "percentage": number }] }
 }
 
-OR:
-
+split_paycheck:
 {
   "action": "split_paycheck",
-  "args": {
-    "gross_amount": number,         // total paycheck amount before splitting
-    "budget_name": string,          // the budget rule name - extract from phrases like "hunt paid X" → budget_name: "hunt"
-    "date": "YYYY-MM-DD",           // optional, OMIT if not specified
-    "description": string           // optional, memo/note for the paycheck
-  }
+  "args": { "gross_amount": number, "budget_name": string, "date": string, "description": string }
 }
 
-OR:
+get_uncategorized_transactions / get_categories:
+{ "action": "<action>", "args": {} }
 
-{
-  "action": "get_uncategorized_transactions",
-  "args": {}
-}
+update_transaction_category:
+{ "action": "update_transaction_category", "args": { "expense_id": string, "category": string } }
 
-OR:
+update_transaction_categories_batch:
+{ "action": "update_transaction_categories_batch", "args": { "updates": [{ "expense_id": string, "category": string }] } }
 
-{
-  "action": "get_categories",
-  "args": {}
-}
-
-OR:
-
-{
-  "action": "update_transaction_category",
-  "args": {
-    "expense_id": string,
-    "category": string
-  }
-}
-
-OR:
-
-{
-  "action": "update_transaction_categories_batch",
-  "args": {
-    "updates": [
-      { "expense_id": string, "category": string },
-      ...
-    ]
-  }
-}
-
-
-Rules:
-- Respond with JSON ONLY. No code fences, no Markdown, no explanations.
-- IMPORTANT: If message matches "<name> paid <amount>" or "<name> <amount>", use "split_paycheck" with budget_name = <name>.
-- If the user says a generic paycheck like "got paid" / "i got paid" without an employer, STILL use "split_paycheck" with budget_name = "default".
-- If the message is clearly about adding a single expense or income (not a paycheck), pick "add_transaction".
-- For credit card payments (paying off a card), use "add_transaction" with transaction_type = "payment".
-- If the message mentions "investments" assume accounts "brokerage" and "roth ira".
-- INFER the category from context: "lunch", "dinner", "restaurant" → "out"; "groceries", "supermarket", "trader joes", "costco" → "groceries"; "uber", "lyft", "taxi" → "lyft"; "amazon", "clothes" → "shopping"; "zelle" → "zelle"; "paid <person>" or "sent <person>" → "zelle" (these are personal payments, NOT credit card payments). Only use "other" if the category is truly unclear.
-- ALWAYS extract the note: capture the descriptive part of the user's message.
-- For zelle/personal payments (category "zelle"), ALWAYS set account to "checkings".
-- Funding account guidance: Only include "funding_account" when the expense is on a credit card account ("sapphire" or "freedom unlimited").
-- Credit card identification: If the user includes a credit card's last 4 digits, map it to the correct card/account:
-  * If the message contains the Sapphire last4 (${process.env.SAPPHIRE_LAST4}), treat the card/account as "sapphire".
-  * If the message contains the Freedom Unlimited last4 (${process.env.FREEDOM_LAST4}), treat the card/account as "freedom unlimited".
-- Amount parsing: Extract numeric amounts from formats like "$12.34", "12", "12.00", "1,234.56". Amounts must be positive numbers.
-- If no date is specified, OMIT the date field entirely.
+RULES:
+- JSON ONLY. No markdown, no explanations.
+- "<name> paid <amount>" or "<name> <amount>" -> split_paycheck with budget_name = <name>.
+- "got paid" without employer -> split_paycheck with budget_name = "default".
+- Infer category from context: lunch/dinner -> "out", groceries/costco -> "groceries", uber/lyft -> "lyft", amazon -> "shopping", "paid <person>" -> "zelle".
+- For zelle payments, always set account to "checkings".
+- Only include funding_account for credit card expenses (${cc_accounts_list}).
+- If no date specified, OMIT the date field.
+- ALWAYS capture the full note from user message.
 
 User message:
 ${user_message}
 `;
 }
 
-function extract_json(text: string): any {
-  // Sometimes models wrap JSON in \`\`\`...\`\`\`
-  const trimmed = text.trim();
+// -----------------------------------------------------------------------------
+// JSON Extraction
+// -----------------------------------------------------------------------------
 
-  const code_fence_match = trimmed.match(/\`\`\`(?:json)?\s*([\s\S]*?)\`\`\`/i);
+/** Extracts JSON from model response, handling code fences */
+function extract_json(text: string): any {
+  const trimmed = text.trim();
+  const code_fence_match = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
   const json_text = code_fence_match ? code_fence_match[1] : trimmed;
 
   if (!json_text) {
@@ -279,6 +215,14 @@ function extract_json(text: string): any {
   return JSON.parse(json_text);
 }
 
+// -----------------------------------------------------------------------------
+// Action Inference
+// -----------------------------------------------------------------------------
+
+/**
+ * Sends user message to Gemini, parses response into structured action.
+ * Validates response matches expected schema before returning.
+ */
 export async function infer_action(
   user_message: string
 ): Promise<parsed_action> {
@@ -295,6 +239,7 @@ export async function infer_action(
     const parsed = extract_json(text);
     console.log("[Gemini] Parsed JSON:", JSON.stringify(parsed, null, 2));
 
+    // Validate and return typed action
     if (parsed.action === "add_transaction" && parsed.args) {
       const a = parsed.args;
       if (
@@ -355,9 +300,7 @@ export async function infer_action(
 
         return {
           action: "add_transaction_batch",
-          args: {
-            transactions: validated_transactions,
-          },
+          args: { transactions: validated_transactions },
         };
       }
     }
@@ -371,10 +314,7 @@ export async function infer_action(
       ) {
         return {
           action: "set_budget_rule",
-          args: {
-            budget_name: a.budget_name,
-            budgets: a.budgets,
-          },
+          args: { budget_name: a.budget_name, budgets: a.budgets },
         };
       }
     }
@@ -400,17 +340,11 @@ export async function infer_action(
     }
 
     if (parsed.action === "get_uncategorized_transactions") {
-      return {
-        action: "get_uncategorized_transactions",
-        args: {},
-      };
+      return { action: "get_uncategorized_transactions", args: {} };
     }
 
     if (parsed.action === "get_categories") {
-      return {
-        action: "get_categories",
-        args: {},
-      };
+      return { action: "get_categories", args: {} };
     }
 
     if (parsed.action === "update_transaction_category" && parsed.args) {
@@ -422,10 +356,7 @@ export async function infer_action(
       ) {
         return {
           action: "update_transaction_category",
-          args: {
-            expense_id: a.expense_id,
-            category: a.category,
-          },
+          args: { expense_id: a.expense_id, category: a.category },
         };
       }
     }

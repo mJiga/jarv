@@ -1,4 +1,7 @@
 // src/mcp/services/payments.ts
+// Payment creation with automatic expense clearing.
+// When a payment is made, matching uncleared expenses are marked as cleared.
+
 import { notion, PAYMENTS_DB_ID, EXPENSES_DB_ID } from "../notion/client";
 import {
   find_account_page_by_title,
@@ -13,18 +16,22 @@ import {
   is_valid_credit_card_account,
 } from "../constants";
 
+// -----------------------------------------------------------------------------
+// Types
+// -----------------------------------------------------------------------------
+
 export interface create_payment_input {
   amount: number;
-  from_account?: string | undefined; // e.g., "checkings", "bills" - defaults to "checkings"
-  to_account?: string | undefined; // e.g., "sapphire", "freedom unlimited" - defaults to "sapphire"
-  date?: string | undefined; // ISO date, defaults to today
+  from_account?: string | undefined; // Source: checkings, bills, etc. Default: checkings
+  to_account?: string | undefined; // Destination: sapphire, freedom unlimited. Default: sapphire
+  date?: string | undefined; // ISO date. Default: today
   note?: string | undefined;
-  category?: string | undefined; // optional category for the payment
+  category?: string | undefined;
 }
 
 export interface cleared_expense_info {
   expense_id: string;
-  amount: number;
+  amount: number; // Amount applied to this expense
   note?: string | undefined;
 }
 
@@ -33,26 +40,30 @@ export interface create_payment_result {
   payment_id?: string | undefined;
   cleared_expenses: cleared_expense_info[];
   cleared_total: number;
-  remaining_unapplied: number;
+  remaining_unapplied: number; // Payment amount that couldn't be matched to expenses
   message?: string | undefined;
   error?: string | undefined;
 }
 
+// -----------------------------------------------------------------------------
+// Core Logic
+// -----------------------------------------------------------------------------
+
 /**
- * Create a payment (transfer) and automatically clear matching expenses.
+ * Creates a payment and auto-clears matching expenses.
  *
  * Flow:
- * 1. Create the payment page in Payments DB
- * 2. Query Expenses DB for uncleared expenses matching to_account + funding_account
- * 3. Walk through expenses (oldest first) until payment amount is exhausted
- * 4. Mark each expense as cleared and link to the payment
- * 5. Return summary
+ * 1. Validate accounts
+ * 2. Create payment page in Payments DB
+ * 3. Query uncleared expenses on the credit card funded by the source account
+ * 4. Walk through oldest expenses first, applying payment until exhausted
+ * 5. Mark expenses as cleared and link to payment
+ * 6. Handle partial payments (updates paid_amount but doesn't mark cleared)
  */
 export async function create_payment(
   input: create_payment_input
 ): Promise<create_payment_result> {
   try {
-    // Validate amount
     if (typeof input.amount !== "number" || input.amount <= 0) {
       return {
         success: false,
@@ -63,11 +74,10 @@ export async function create_payment(
       };
     }
 
-    // Default accounts: from_account defaults to checkings, to_account defaults to sapphire
     const from_account = input.from_account || "checkings";
     const to_account = input.to_account || "sapphire";
 
-    // Validate accounts
+    // Validate account types
     if (!is_valid_funding_account(from_account)) {
       return {
         success: false,
@@ -111,9 +121,7 @@ export async function create_payment(
       };
     }
 
-    // Default date to today
-    const today = new Date();
-    const iso_date = input.date || today.toISOString().slice(0, 10);
+    const iso_date = input.date || new Date().toISOString().slice(0, 10);
 
     // Handle optional category
     const category_name = input.category
@@ -124,26 +132,15 @@ export async function create_payment(
       category_page_id = await ensure_category_page(category_name);
     }
 
-    // Build title
-    const title = `payment $${input.amount} ${from_account} → ${to_account}`;
+    const title = `payment $${input.amount} ${from_account} -> ${to_account}`;
 
-    // Step 1: Create the payment page
+    // Step 1: Create payment page
     const payment_properties: any = {
-      title: {
-        title: [{ text: { content: title } }],
-      },
-      amount: {
-        number: input.amount,
-      },
-      date: {
-        date: { start: iso_date },
-      },
-      from_account: {
-        relation: [{ id: from_account_page_id }],
-      },
-      to_account: {
-        relation: [{ id: to_account_page_id }],
-      },
+      title: { title: [{ text: { content: title } }] },
+      amount: { number: input.amount },
+      date: { date: { start: iso_date } },
+      from_account: { relation: [{ id: from_account_page_id }] },
+      to_account: { relation: [{ id: to_account_page_id }] },
     };
 
     if (input.note) {
@@ -152,7 +149,6 @@ export async function create_payment(
       };
     }
 
-    // Add category if provided
     if (category_page_id) {
       payment_properties.categories = {
         relation: [{ id: category_page_id }],
@@ -166,29 +162,18 @@ export async function create_payment(
 
     const payment_id = payment_response.id;
 
-    // Step 2: Query uncleared expenses matching to_account + funding_account
+    // Step 2: Find uncleared expenses matching this payment's accounts
+    // Expenses must: be on the credit card, funded by the source account, not cleared
     const expenses_results = await query_data_source_with_filter(
       EXPENSES_DB_ID,
       {
         and: [
-          {
-            property: "accounts",
-            relation: {
-              contains: to_account_page_id,
-            },
-          },
+          { property: "accounts", relation: { contains: to_account_page_id } },
           {
             property: "funding_account",
-            relation: {
-              contains: from_account_page_id,
-            },
+            relation: { contains: from_account_page_id },
           },
-          {
-            property: "cleared",
-            checkbox: {
-              equals: false,
-            },
-          },
+          { property: "cleared", checkbox: { equals: false } },
         ],
       },
       [
@@ -197,7 +182,7 @@ export async function create_payment(
       ]
     );
 
-    // Step 3: Walk expenses until payment runs out
+    // Step 3: Apply payment to expenses (oldest first)
     let remaining = input.amount;
     const cleared_expenses: cleared_expense_info[] = [];
     const expense_ids_to_link: string[] = [];
@@ -210,8 +195,7 @@ export async function create_payment(
 
       if (typeof expense_amount !== "number" || expense_amount <= 0) continue;
 
-      // Get owed_amount from Notion formula, or calculate from paid_amount
-      // owed_amount formula in Notion: max(amount - paid_amount, 0)
+      // Calculate what's still owed on this expense
       const owed_amount_prop = props.owed_amount?.formula?.number;
       const existing_paid = props.paid_amount?.number || 0;
       const owed_amount =
@@ -231,58 +215,42 @@ export async function create_payment(
           amount: owed_amount,
           note: expense_note,
         });
-
         expense_ids_to_link.push(page.id);
         remaining -= owed_amount;
 
-        // Mark expense as cleared and link to payment
         await notion.pages.update({
           page_id: page.id,
           properties: {
-            cleared: {
-              checkbox: true,
-            },
-            cleared_by: {
-              relation: [{ id: payment_id }],
-            },
-            paid_amount: {
-              number: expense_amount, // Fully paid
-            },
+            cleared: { checkbox: true },
+            cleared_by: { relation: [{ id: payment_id }] },
+            paid_amount: { number: expense_amount },
           },
         });
       } else {
-        // Partial payment - apply what we have left and continue
+        // Partial payment - apply remaining and stop
         const new_paid_amount = existing_paid + remaining;
 
         cleared_expenses.push({
           expense_id: page.id,
           amount: remaining,
-          note: `${
-            expense_note || "expense"
-          } (partial: $${remaining} of $${expense_amount})`,
+          note: `${expense_note || "expense"} (partial: $${remaining} of $${expense_amount})`,
         });
-
         expense_ids_to_link.push(page.id);
 
-        // Update paid_amount but don't mark as cleared yet
         await notion.pages.update({
           page_id: page.id,
           properties: {
-            paid_amount: {
-              number: new_paid_amount,
-            },
-            cleared_by: {
-              relation: [{ id: payment_id }],
-            },
+            paid_amount: { number: new_paid_amount },
+            cleared_by: { relation: [{ id: payment_id }] },
           },
         });
 
-        remaining = 0; // Payment fully used
+        remaining = 0;
         break;
       }
     }
 
-    // Update payment with cleared_expenses relation
+    // Step 4: Link cleared expenses to payment
     if (expense_ids_to_link.length > 0) {
       await notion.pages.update({
         page_id: payment_id,

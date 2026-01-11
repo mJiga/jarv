@@ -1,4 +1,7 @@
 // src/mcp/notion/client.ts
+// Notion API client and database ID exports.
+// All Notion interactions flow through this client.
+
 import "dotenv/config";
 import { Client } from "@notionhq/client";
 
@@ -10,11 +13,9 @@ function requireEnv(name: string): string {
   return value;
 }
 
-const apiKey = requireEnv("NOTION_API_KEY");
+export const notion = new Client({ auth: requireEnv("NOTION_API_KEY") });
 
-export const notion = new Client({ auth: apiKey });
-
-// Separate DBs
+// Database IDs - each maps to a distinct Notion database
 export const EXPENSES_DB_ID = requireEnv("EXPENSES_DB_ID");
 export const INCOME_DB_ID = requireEnv("INCOME_DB_ID");
 export const ACCOUNTS_DB_ID = requireEnv("ACCOUNTS_DB_ID");

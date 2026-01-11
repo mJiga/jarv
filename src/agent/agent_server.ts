@@ -1,4 +1,7 @@
 // src/agent/agent_server.ts
+// Agent server: receives natural language, infers action via LLM, calls MCP tools.
+// Acts as the bridge between user input and the MCP tool layer.
+
 import "dotenv/config";
 import express, { Request, Response } from "express";
 import { infer_action } from "./llm/gemini_client";
@@ -15,14 +18,16 @@ import {
 
 const PORT = Number(process.env.AGENT_PORT ?? 4000);
 
-type any_action = {
-  action: string;
-  args?: any;
-};
+// Loose type to allow dynamic action handling
+type any_action = { action: string; args?: any };
 
 const app = express();
 app.use(express.json());
 
+/**
+ * POST /chat
+ * Receives { message: string }, infers action, executes MCP tool, returns result.
+ */
 app.post("/chat", async (req: Request, res: Response) => {
   try {
     const message = req.body?.message;
@@ -32,11 +37,9 @@ app.post("/chat", async (req: Request, res: Response) => {
 
     console.log("[Agent] User message:", message);
 
-    // IMPORTANT: cast to loose type to avoid TS "never" when you add new actions.
     const action = (await infer_action(message)) as any_action;
     console.log("[Agent] Parsed action:", action);
 
-    // If your infer_action sometimes returns { action: "unknown" }
     if (!action?.action || action.action === "unknown") {
       return res.json({
         reply: "I couldn't confidently map that to a tool call.",
@@ -46,6 +49,7 @@ app.post("/chat", async (req: Request, res: Response) => {
 
     let mcp_result: { raw: any; message: string } | null = null;
 
+    // Route to appropriate MCP tool
     switch (action.action) {
       case "add_transaction":
         mcp_result = await call_add_transaction_tool(action.args);
@@ -76,9 +80,7 @@ app.post("/chat", async (req: Request, res: Response) => {
         break;
 
       case "update_transaction_categories_batch":
-        mcp_result = await call_update_transaction_categories_batch_tool(
-          action.args
-        );
+        mcp_result = await call_update_transaction_categories_batch_tool(action.args);
         break;
 
       default:

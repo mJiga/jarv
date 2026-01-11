@@ -1,15 +1,16 @@
 {
   "name": "jarvis",
   "version": "1.0.0",
-  "description": "",
+  "description": "Personal finance MCP server + LLM agent backed by Notion",
   "main": "index.js",
   "scripts": {
     "mcp": "ts-node-dev --respawn src/mcp/server.ts",
-    "agent": "ts-node-dev --respawn src/agent/agent_server.ts"
+    "agent": "ts-node-dev --respawn src/agent/agent_server.ts",
+    "typecheck": "tsc --noEmit"
   },
-  "keywords": [],
+  "keywords": ["mcp", "notion", "finance", "gemini", "llm", "agent"],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "type": "commonjs",
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

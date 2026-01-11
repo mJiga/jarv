@@ -1,9 +1,6 @@
 // src/mcp/constants.ts
-// Shared account constants used across the MCP server and services
+// Centralized account definitions. Single source of truth for valid account names.
 
-/**
- * All valid account names in the system.
- */
 export const ACCOUNTS = [
   "checkings",
   "short term savings",
@@ -17,9 +14,7 @@ export const ACCOUNTS = [
 
 export type account_type = (typeof ACCOUNTS)[number];
 
-/**
- * Accounts that can fund credit card expenses or payments.
- */
+// Accounts that can source funds for credit card expenses or payments
 export const FUNDING_ACCOUNTS = [
   "checkings",
   "bills",
@@ -28,32 +23,23 @@ export const FUNDING_ACCOUNTS = [
 
 export type funding_account_type = (typeof FUNDING_ACCOUNTS)[number];
 
-/**
- * Credit card accounts.
- */
+// Credit cards that accumulate expenses and receive payments
 export const CREDIT_CARD_ACCOUNTS = ["sapphire", "freedom unlimited"] as const;
 
 export type credit_card_account_type = (typeof CREDIT_CARD_ACCOUNTS)[number];
 
-/**
- * Helper to check if a string is a valid account.
- */
+// Type guards for runtime validation
+
 export function is_valid_account(value: string): value is account_type {
   return ACCOUNTS.includes(value as account_type);
 }
 
-/**
- * Helper to check if a string is a valid funding account.
- */
 export function is_valid_funding_account(
   value: string
 ): value is funding_account_type {
   return FUNDING_ACCOUNTS.includes(value as funding_account_type);
 }
 
-/**
- * Helper to check if a string is a valid credit card account.
- */
 export function is_valid_credit_card_account(
   value: string
 ): value is credit_card_account_type {

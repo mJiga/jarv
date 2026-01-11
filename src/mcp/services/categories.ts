@@ -1,4 +1,7 @@
 // src/mcp/services/categories.ts
+// Category management for expenses.
+// Handles uncategorized inbox (category="other") and category updates.
+
 import { notion, EXPENSES_DB_ID, CATEGORIES_DB_ID } from "../notion/client";
 import {
   ensure_category_page,
@@ -6,9 +9,9 @@ import {
   validate_category,
 } from "../notion/utils";
 
-/* ──────────────────────────────
- * Types
- * ────────────────────────────── */
+// -----------------------------------------------------------------------------
+// Types
+// -----------------------------------------------------------------------------
 
 export interface uncategorized_transaction {
   id: string;
@@ -35,17 +38,18 @@ export interface update_transaction_category_result {
   error?: string | undefined;
 }
 
-/* ──────────────────────────────
- * get_uncategorized_transactions
- * ────────────────────────────── */
+// -----------------------------------------------------------------------------
+// Get Uncategorized (Inbox)
+// -----------------------------------------------------------------------------
 
 /**
- * Returns all expenses that have category "other" — the inbox.
- * Agent can use this to review and re-categorize them.
+ * Fetches expenses with category="other" (the inbox).
+ * These are transactions that need manual categorization.
+ * Returns up to 50 most recent uncategorized expenses.
  */
 export async function get_uncategorized_transactions(): Promise<get_uncategorized_transactions_result> {
   try {
-    // First, find the "other" category page id
+    // Find the "other" category page
     const categories_ds_id = await get_data_source_id_for_database(
       CATEGORIES_DB_ID
     );
@@ -58,16 +62,14 @@ export async function get_uncategorized_transactions(): Promise<get_uncategorize
       page_size: 1,
     });
 
-    if (!cat_response.results || cat_response.results.length === 0) {
-      return { success: true, expenses: [] }; // no "other" category exists
+    if (!cat_response.results?.length) {
+      return { success: true, expenses: [] };
     }
 
     const other_category_id = cat_response.results[0].id;
 
-    // Query expenses that have category relation to "other"
-    const expenses_ds_id = await get_data_source_id_for_database(
-      EXPENSES_DB_ID
-    );
+    // Query expenses linked to "other" category
+    const expenses_ds_id = await get_data_source_id_for_database(EXPENSES_DB_ID);
     const response = await (notion as any).dataSources.query({
       data_source_id: expenses_ds_id,
       filter: {
@@ -75,27 +77,18 @@ export async function get_uncategorized_transactions(): Promise<get_uncategorize
         relation: { contains: other_category_id },
       },
       sorts: [{ timestamp: "created_time", direction: "descending" }],
-      page_size: 50, // reasonable limit
+      page_size: 50,
     });
 
     const expenses: uncategorized_transaction[] = (response.results || []).map(
       (page: any) => {
         const props = page.properties;
-
-        // Extract amount
-        const amount = props?.amount?.number ?? 0;
-
-        // Extract note (rich_text)
-        const note_arr = props?.note?.rich_text;
-        const note =
-          Array.isArray(note_arr) && note_arr.length > 0
-            ? note_arr[0]?.plain_text ?? ""
-            : "";
-
-        // Extract date
-        const date = props?.date?.date?.start ?? "";
-
-        return { id: page.id, amount, note, date };
+        return {
+          id: page.id,
+          amount: props?.amount?.number ?? 0,
+          note: props?.note?.rich_text?.[0]?.plain_text ?? "",
+          date: props?.date?.date?.start ?? "",
+        };
       }
     );
 
@@ -109,20 +102,19 @@ export async function get_uncategorized_transactions(): Promise<get_uncategorize
   }
 }
 
-/* ──────────────────────────────
- * update_transaction_category
- * ────────────────────────────── */
+// -----------------------------------------------------------------------------
+// Update Category
+// -----------------------------------------------------------------------------
 
 /**
- * Update a specific expense's category by its page ID.
+ * Updates the category of a single expense.
+ * Invalid categories are coerced to "other".
  */
 export async function update_transaction_category(
   input: update_transaction_category_input
 ): Promise<update_transaction_category_result> {
   try {
-    // Validate category - force "other" if invalid
     const validated_category = validate_category(input.category);
-
     const category_page_id = await ensure_category_page(validated_category);
 
     await notion.pages.update({
@@ -148,9 +140,9 @@ export async function update_transaction_category(
   }
 }
 
-/* ──────────────────────────────
- * update_transaction_categories_batch
- * ────────────────────────────── */
+// -----------------------------------------------------------------------------
+// Batch Update
+// -----------------------------------------------------------------------------
 
 export interface update_transaction_categories_batch_input {
   updates: Array<{
@@ -173,7 +165,8 @@ export interface update_transaction_categories_batch_result {
 }
 
 /**
- * Update categories for multiple expenses at once.
+ * Updates categories for multiple expenses.
+ * Processes sequentially; individual failures don't block others.
  */
 export async function update_transaction_categories_batch(
   input: update_transaction_categories_batch_input

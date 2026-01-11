@@ -1,4 +1,7 @@
 // src/mcp/notion/utils.ts
+// Notion query helpers and shared utilities.
+// Handles category caching, page lookups, and common query patterns.
+
 import {
   notion,
   ACCOUNTS_DB_ID,
@@ -6,11 +9,11 @@ import {
   BUDGET_RULES_DB_ID,
 } from "./client";
 
-/* ──────────────────────────────
- * Available Categories (fetched from Notion)
- * ────────────────────────────── */
+// -----------------------------------------------------------------------------
+// Category Management
+// -----------------------------------------------------------------------------
 
-// Fallback categories used if Notion fetch fails
+// Fallback if Notion fetch fails - ensures system remains functional
 const FALLBACK_CATEGORIES = [
   "paycheck",
   "out",
@@ -28,19 +31,19 @@ const FALLBACK_CATEGORIES = [
   "other",
 ] as const;
 
-// Cache for categories fetched from Notion
+// In-memory cache to reduce Notion API calls
 let cached_categories: string[] | null = null;
 let cache_timestamp: number = 0;
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
- * Fetches all category titles from the Notion Categories DB.
- * Results are cached for 5 minutes to avoid excessive API calls.
+ * Fetches category list from Notion with caching.
+ * Returns cached value if within TTL, otherwise queries Notion.
+ * Falls back to hardcoded list on error.
  */
 export async function get_available_categories(): Promise<string[]> {
   const now = Date.now();
 
-  // Return cached value if still valid
   if (cached_categories && now - cache_timestamp < CACHE_TTL_MS) {
     return cached_categories;
   }
@@ -52,7 +55,7 @@ export async function get_available_categories(): Promise<string[]> {
 
     const response = await (notion as any).dataSources.query({
       data_source_id,
-      page_size: 100, // Should be plenty for categories
+      page_size: 100,
     });
 
     const categories: string[] = (response.results || [])
@@ -63,38 +66,38 @@ export async function get_available_categories(): Promise<string[]> {
       })
       .filter((cat: string | null): cat is string => !!cat);
 
-    // Ensure "other" is always present as fallback
+    // Ensure "other" always exists as the catch-all category
     if (!categories.includes("other")) {
       categories.push("other");
     }
 
-    // Update cache
     cached_categories = categories;
     cache_timestamp = now;
 
     return categories;
   } catch (err) {
     console.error("Error fetching categories from Notion:", err);
-    // Return cached value if available, otherwise fallback
     return cached_categories ?? [...FALLBACK_CATEGORIES];
   }
 }
 
 /**
- * Validates a category string. Returns the category if valid, or "other" if not.
- * Uses cached categories from get_available_categories().
+ * Validates and normalizes a category string.
+ * Unknown categories are coerced to "other" to prevent invalid data.
  */
 export function validate_category(category: string): string {
   const normalized = (category ?? "").trim().toLowerCase();
   const available: readonly string[] = cached_categories ?? FALLBACK_CATEGORIES;
-  if (available.includes(normalized)) {
-    return normalized;
-  }
-  return "other";
+  return available.includes(normalized) ? normalized : "other";
 }
 
+// -----------------------------------------------------------------------------
+// Data Source Queries
+// -----------------------------------------------------------------------------
+
 /**
- * Get the first data source id attached to a database.
+ * Retrieves the data source ID for a Notion database.
+ * Required for using the dataSources.query API.
  */
 export async function get_data_source_id_for_database(
   database_id: string
@@ -110,7 +113,8 @@ export async function get_data_source_id_for_database(
 }
 
 /**
- * Generic helper: query a data source by exact title.
+ * Queries a database by exact title match.
+ * Common pattern for looking up accounts, categories, budget rules.
  */
 export async function query_data_source_by_title(
   database_id: string,
@@ -132,62 +136,8 @@ export async function query_data_source_by_title(
 }
 
 /**
- * Accounts DB: resolve account page by title ("checkings", "savings", ...).
- */
-export async function find_account_page_by_title(
-  title: string
-): Promise<string | null> {
-  const results = await query_data_source_by_title(ACCOUNTS_DB_ID, title, 1);
-  const first = results[0];
-  return first ? first.id : null;
-}
-
-/**
- * Categories DB: resolve category page by title ("out", "groceries", ...).
- */
-export async function find_category_page_by_title(
-  title: string
-): Promise<string | null> {
-  const results = await query_data_source_by_title(CATEGORIES_DB_ID, title, 1);
-  const first = results[0];
-  return first ? first.id : null;
-}
-
-/**
- * Ensure a category page exists; create it if missing.
- */
-export async function ensure_category_page(title: string): Promise<string> {
-  const existing_id = await find_category_page_by_title(title);
-  if (existing_id) return existing_id;
-
-  const created = await notion.pages.create({
-    parent: { database_id: CATEGORIES_DB_ID },
-    properties: {
-      title: {
-        title: [
-          {
-            text: { content: title },
-          },
-        ],
-      },
-    },
-  });
-
-  return created.id;
-}
-
-/**
- * Budget rules DB: find all pages for a given rule name (title).
- */
-export async function find_budget_rule_pages_by_title(
-  rule_name: string
-): Promise<any[]> {
-  // up to 100 allocations per rule is plenty
-  return await query_data_source_by_title(BUDGET_RULES_DB_ID, rule_name, 100);
-}
-
-/**
- * Generic helper: query a data source with custom filter.
+ * Queries a database with a custom filter and optional sorting.
+ * Used for complex queries like finding uncleared expenses.
  */
 export async function query_data_source_with_filter(
   database_id: string,
@@ -212,31 +162,78 @@ export async function query_data_source_with_filter(
   return res.results;
 }
 
+// -----------------------------------------------------------------------------
+// Page Lookups
+// -----------------------------------------------------------------------------
+
+/** Resolves an account page ID by its title (e.g., "checkings") */
+export async function find_account_page_by_title(
+  title: string
+): Promise<string | null> {
+  const results = await query_data_source_by_title(ACCOUNTS_DB_ID, title, 1);
+  return results[0]?.id ?? null;
+}
+
+/** Resolves a category page ID by its title (e.g., "groceries") */
+export async function find_category_page_by_title(
+  title: string
+): Promise<string | null> {
+  const results = await query_data_source_by_title(CATEGORIES_DB_ID, title, 1);
+  return results[0]?.id ?? null;
+}
+
 /**
- * Safely get the plain-text title of a page.
+ * Gets or creates a category page.
+ * Safe to call with validated categories - won't create arbitrary new ones
+ * since validate_category() should be called first.
  */
+export async function ensure_category_page(title: string): Promise<string> {
+  const existing_id = await find_category_page_by_title(title);
+  if (existing_id) return existing_id;
+
+  const created = await notion.pages.create({
+    parent: { database_id: CATEGORIES_DB_ID },
+    properties: {
+      title: {
+        title: [{ text: { content: title } }],
+      },
+    },
+  });
+
+  return created.id;
+}
+
+/** Finds all budget rule pages for a given rule name (up to 100 allocations) */
+export async function find_budget_rule_pages_by_title(
+  rule_name: string
+): Promise<any[]> {
+  return await query_data_source_by_title(BUDGET_RULES_DB_ID, rule_name, 100);
+}
+
+// -----------------------------------------------------------------------------
+// Utility Functions
+// -----------------------------------------------------------------------------
+
+/** Extracts plain text from a Notion page title property */
 export function get_page_title_text(page: any): string {
   const title = page?.properties?.title?.title;
   if (!Array.isArray(title) || title.length === 0) return "";
   return title[0]?.plain_text ?? "";
 }
 
-/* ──────────────────────────────
- * Shared Types
- * ────────────────────────────── */
+// -----------------------------------------------------------------------------
+// Shared Types
+// -----------------------------------------------------------------------------
 
-// NOTE: "payment" is supported. add_transaction handles all types uniformly.
+/** Transaction types supported by add_transaction */
 export type transaction_type = "expense" | "income" | "payment";
 
-/**
- * Fields that live on an income row in the Notion Income DB.
- * Shared by transactions and budgets modules.
- */
+/** Fields stored on income rows in Notion. Shared by transactions and budgets. */
 export interface income_db_fields {
-  amount: number; // net amount hitting this account
-  account?: string | undefined; // account title (e.g., "checkings")
-  date?: string | undefined; // ISO "YYYY-MM-DD"
-  pre_breakdown?: number | undefined; // total gross paycheck / original amount
-  percentage?: number | undefined; // fraction (0–1) of gross going into this row
-  budget?: string | undefined; // label for the budget rule (e.g., rule_name)
+  amount: number;
+  account?: string | undefined;
+  date?: string | undefined;
+  pre_breakdown?: number | undefined; // Gross amount before budget split
+  percentage?: number | undefined; // Fraction of gross (0-1)
+  budget?: string | undefined; // Budget rule name
 }

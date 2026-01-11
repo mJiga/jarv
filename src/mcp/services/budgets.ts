@@ -1,11 +1,13 @@
 // src/mcp/services/budgets.ts
+// Budget rule management and paycheck splitting.
+// Budget rules define how income is distributed across accounts.
+
 import { notion, BUDGET_RULES_DB_ID } from "../notion/client";
 import {
   find_budget_rule_pages_by_title,
   get_page_title_text,
   find_account_page_by_title,
 } from "../notion/utils";
-
 import {
   add_transaction,
   add_transaction_input,
@@ -13,9 +15,13 @@ import {
   income_db_fields,
 } from "./transactions";
 
+// -----------------------------------------------------------------------------
+// Types
+// -----------------------------------------------------------------------------
+
 export interface budget_allocation {
-  account: string; // account title ("checkings", "savings", ...)
-  percentage: number; // 0–1
+  account: string; // Account title (e.g., "checkings")
+  percentage: number; // Fraction of gross income (0-1)
 }
 
 export interface set_budget_rule_input {
@@ -29,9 +35,14 @@ export interface set_budget_rule_result {
   error?: string;
 }
 
+// -----------------------------------------------------------------------------
+// Set Budget Rule
+// -----------------------------------------------------------------------------
+
 /**
- * Create/update a named budget rule.
- * For a given rule_name, old rows are archived and replaced.
+ * Creates or updates a budget rule.
+ * Archives existing rules with the same name before creating new ones.
+ * Percentages must sum to 1.0 (100%).
  */
 export async function set_budget_rule(
   input: set_budget_rule_input
@@ -39,13 +50,11 @@ export async function set_budget_rule(
   try {
     const { budget_name, budgets } = input;
 
-    if (!budgets || budgets.length === 0) {
-      return {
-        success: false,
-        error: "budgets array must not be empty.",
-      };
+    if (!budgets?.length) {
+      return { success: false, error: "budgets array must not be empty." };
     }
 
+    // Validate percentages sum to 100%
     const sum = budgets.reduce((acc, b) => acc + b.percentage, 0);
     if (Math.abs(sum - 1) > 0.001) {
       return {
@@ -54,7 +63,7 @@ export async function set_budget_rule(
       };
     }
 
-    // Validate accounts exist in the Accounts DB
+    // Validate all accounts exist
     for (const b of budgets) {
       const account_page_id = await find_account_page_by_title(b.account);
       if (!account_page_id) {
@@ -65,39 +74,23 @@ export async function set_budget_rule(
       }
     }
 
-    // Archive existing pages for this rule
+    // Archive existing rules with this name
     const existing = await find_budget_rule_pages_by_title(budget_name);
     for (const page of existing) {
-      await notion.pages.update({
-        page_id: page.id,
-        archived: true,
-      });
+      await notion.pages.update({ page_id: page.id, archived: true });
     }
 
-    // Create new pages
+    // Create new rule pages (one per account allocation)
     for (const b of budgets) {
       const account_page_id = await find_account_page_by_title(b.account);
-      if (!account_page_id) {
-        // Shouldn't happen because we validated above, but guard anyway
-        continue;
-      }
+      if (!account_page_id) continue;
 
       await notion.pages.create({
         parent: { database_id: BUDGET_RULES_DB_ID },
         properties: {
-          title: {
-            title: [
-              {
-                text: { content: budget_name },
-              },
-            ],
-          },
-          account: {
-            relation: [{ id: account_page_id }],
-          },
-          percentage: {
-            number: b.percentage,
-          },
+          title: { title: [{ text: { content: budget_name } }] },
+          account: { relation: [{ id: account_page_id }] },
+          percentage: { number: b.percentage },
         },
       });
     }
@@ -115,24 +108,20 @@ export async function set_budget_rule(
   }
 }
 
-/* ──────────────────────────────
- * split_paycheck
- * ────────────────────────────── */
+// -----------------------------------------------------------------------------
+// Split Paycheck
+// -----------------------------------------------------------------------------
 
 export interface split_paycheck_input {
   gross_amount: number;
-  budget_name?: string | undefined; // default 'default'
-  date?: string | undefined; // ISO 'YYYY-MM-DD'
-  description?: string | undefined; // optional memo text
+  budget_name?: string | undefined; // Default: "default"
+  date?: string | undefined; // ISO date
+  description?: string | undefined;
 }
 
-/**
- * A single paycheck split entry, shaped like an income DB row + extras.
- * amount/account/date/pre_breakdown/budget come from income_db_fields.
- */
 export interface split_paycheck_entry extends income_db_fields {
-  percentage: number; // rule share (0–1)
-  portion: number; // same as amount, explicit
+  percentage: number;
+  portion: number;
   transaction_id?: string | undefined;
   error?: string | undefined;
 }
@@ -150,14 +139,16 @@ export type split_paycheck_result =
     };
 
 /**
- * Split a paycheck according to a named budget rule.
- * Writes income rows via add_transaction, using pre_breakdown + budget.
+ * Splits a paycheck across accounts according to a budget rule.
+ * Creates one income transaction per account allocation.
+ * Each transaction stores the original gross_amount as pre_breakdown.
  */
 export async function split_paycheck(
   input: split_paycheck_input
 ): Promise<split_paycheck_result> {
   try {
-    const gross_amount = input.gross_amount;
+    const { gross_amount } = input;
+
     if (typeof gross_amount !== "number" || gross_amount <= 0) {
       return {
         success: false,
@@ -166,11 +157,10 @@ export async function split_paycheck(
     }
 
     const budget_name = input.budget_name || "default";
-    const today = new Date().toISOString().slice(0, 10);
-    const date = input.date || today;
+    const date = input.date || new Date().toISOString().slice(0, 10);
 
     const rule_pages = await find_budget_rule_pages_by_title(budget_name);
-    if (!rule_pages || rule_pages.length === 0) {
+    if (!rule_pages?.length) {
       return {
         success: false,
         error: `no budget rule found with name '${budget_name}'.`,
@@ -181,27 +171,18 @@ export async function split_paycheck(
 
     for (const page of rule_pages) {
       const props: any = page.properties;
-
       const percentage: number = props.percentage?.number ?? 0;
       const relation = props.account?.relation?.[0];
 
-      if (!relation || percentage <= 0) {
-        // malformed entry, skip
-        continue;
-      }
+      if (!relation || percentage <= 0) continue;
 
+      // Resolve account title from relation
       const account_page = await notion.pages.retrieve({
         page_id: relation.id,
       });
-
       const account_title = get_page_title_text(account_page) || "checkings";
-      const portion_raw = gross_amount * percentage;
-      const portion = Number(portion_raw.toFixed(2));
 
-      const memo_parts = [
-        `paycheck split (${budget_name})`,
-        input.description,
-      ].filter(Boolean);
+      const portion = Number((gross_amount * percentage).toFixed(2));
 
       const tx_input: add_transaction_input = {
         amount: portion,
@@ -226,12 +207,7 @@ export async function split_paycheck(
       });
     }
 
-    return {
-      success: true,
-      gross_amount,
-      budget_name,
-      entries,
-    };
+    return { success: true, gross_amount, budget_name, entries };
   } catch (err: any) {
     console.error("error splitting paycheck:", err);
     return {
