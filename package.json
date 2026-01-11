@@ -4,6 +4,10 @@
   "description": "Personal finance MCP server + LLM agent backed by Notion",
   "main": "index.js",
   "scripts": {
+    "build": "tsc",
+    "start": "node dist/mcp/server.js",
+    "start:mcp": "node dist/mcp/server.js",
+    "start:agent": "node dist/agent/agent_server.js",
     "mcp": "ts-node-dev --respawn src/mcp/server.ts",
     "agent": "ts-node-dev --respawn src/agent/agent_server.ts",
     "typecheck": "tsc --noEmit"
