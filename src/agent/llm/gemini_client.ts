@@ -9,6 +9,7 @@ import {
   FUNDING_ACCOUNTS,
   CREDIT_CARD_ACCOUNTS,
   TRANSACTION_TYPES,
+  CATEGORY_FUNDING_MAP,
   account_type,
   funding_account_type,
   credit_card_account_type,
@@ -46,7 +47,7 @@ export type parsed_action =
       args: {
         transactions: Array<{
           amount: number;
-          transaction_type: "expense" | "income" | "payment";
+          transaction_type: transaction_type;
           account?: account_type;
           category?: string;
           date?: string;
@@ -110,6 +111,11 @@ function build_prompt(user_message: string): string {
   const funding_accounts_list = FUNDING_ACCOUNTS.join(", ");
   const cc_accounts_list = CREDIT_CARD_ACCOUNTS.join(", ");
 
+  // Build category-to-funding mapping for prompt
+  const category_funding_entries = Object.entries(CATEGORY_FUNDING_MAP)
+    .map(([cat, fund]) => `${cat} -> ${fund}`)
+    .join(", ");
+
   return `
 You are a finance command parser for my personal expense tracker.
 
@@ -120,6 +126,9 @@ CC LAST 4 DIGITS: ${card_info}
 VALID ACCOUNTS: ${accounts_list}
 VALID FUNDING ACCOUNTS: ${funding_accounts_list}
 VALID CREDIT CARDS: ${cc_accounts_list}
+
+CATEGORY FUNDING DEFAULTS: ${category_funding_entries}
+(These categories auto-assign funding_account if not specified. Other categories default to checkings.)
 
 CARD MATCHING RULES:
 - If the user message includes a 4-digit number matching CC LAST 4 above, use that card.
@@ -244,9 +253,7 @@ export async function infer_action(
       const a = parsed.args;
       if (
         typeof a.amount === "number" &&
-        (a.transaction_type === "expense" ||
-          a.transaction_type === "income" ||
-          a.transaction_type === "payment")
+        TRANSACTION_TYPES.includes(a.transaction_type)
       ) {
         const is_valid_date =
           typeof a.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(a.date);

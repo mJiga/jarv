@@ -14,6 +14,7 @@ import {
 import {
   ACCOUNTS,
   FUNDING_ACCOUNTS,
+  CATEGORY_FUNDING_MAP,
   is_valid_account,
   is_valid_funding_account,
   is_valid_credit_card_account,
@@ -149,7 +150,11 @@ export async function add_transaction(
     let funding_account_page_id: string | null = null;
 
     if (input.transaction_type === "expense" && is_credit_card) {
-      const funding_account_name = input.funding_account || "checkings";
+      // Priority: explicit input > category mapping > default checkings
+      const funding_account_name =
+        input.funding_account ||
+        CATEGORY_FUNDING_MAP[category_name] ||
+        "checkings";
 
       if (!is_valid_funding_account(funding_account_name)) {
         return {

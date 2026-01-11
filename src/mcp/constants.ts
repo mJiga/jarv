@@ -28,6 +28,22 @@ export const CREDIT_CARD_ACCOUNTS = ["sapphire", "freedom unlimited"] as const;
 
 export type credit_card_account_type = (typeof CREDIT_CARD_ACCOUNTS)[number];
 
+// Transaction types
+export const TRANSACTION_TYPES = ["expense", "income", "payment"] as const;
+
+export type transaction_type = (typeof TRANSACTION_TYPES)[number];
+
+// Category-to-funding-account mapping
+// Categories in this map auto-assign funding_account when not explicitly provided
+export const CATEGORY_FUNDING_MAP: Record<string, funding_account_type> = {
+  groceries: "bills",
+  gas: "bills",
+  att: "bills",
+  car: "bills",
+  house: "bills",
+  chatgpt: "bills",
+};
+
 // Type guards for runtime validation
 
 export function is_valid_account(value: string): value is account_type {
