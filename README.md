@@ -2,6 +2,11 @@
 
 A Model Context Protocol (MCP) server for personal finance tracking, backed by Notion databases. Includes an LLM-powered agent (Gemini) that parses natural language into structured tool calls.
 
+> **Important:** This project is tightly coupled to a specific Notion workspace:  
+> **[Jarvis Notion Site](https://memoo0.notion.site/jarv-2c44abe19ef580d4a728c3bb2509558e)**
+>
+> The database schemas, relations, and formulas are configured within Notion itself. To use this project, in order to procede, duplicate the notion template
+
 ---
 
 ## Architecture
