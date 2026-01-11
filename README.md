@@ -67,6 +67,8 @@ A Model Context Protocol (MCP) server for personal finance tracking, backed by N
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+> **Note:** If using the MCP server through ChatGPT, Claude, or other LLM clients with native MCP support, the entire `src/agent/` directory is not necessary. Those clients call the MCP tools directly at `POST /mcp`. The agent is only needed if you want a standalone `/chat` endpoint with Gemini-based parsing.
+
 ---
 
 ## Project Structure
