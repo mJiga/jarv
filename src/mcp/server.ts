@@ -330,9 +330,60 @@ server.registerTool(
 
 const PORT = Number(process.env.PORT ?? 3000);
 
+// Check which env vars are set (for debugging)
+function checkEnvVars(): { missing: string[]; set: string[] } {
+  const required = [
+    "NOTION_API_KEY",
+    "EXPENSES_DB_ID",
+    "INCOME_DB_ID",
+    "PAYMENTS_DB_ID",
+    "ACCOUNTS_DB_ID",
+    "CATEGORIES_DB_ID",
+    "BUDGET_RULES_DB_ID",
+  ];
+  const missing: string[] = [];
+  const set: string[] = [];
+  for (const name of required) {
+    if (process.env[name]) {
+      set.push(name);
+    } else {
+      missing.push(name);
+    }
+  }
+  return { missing, set };
+}
+
 async function main() {
   const app = express();
   app.use(express.json());
+
+  // Health check endpoint
+  app.get("/health", (_req: Request, res: Response) => {
+    const envCheck = checkEnvVars();
+    res.json({
+      status: envCheck.missing.length === 0 ? "ok" : "misconfigured",
+      timestamp: new Date().toISOString(),
+      env: {
+        set: envCheck.set,
+        missing: envCheck.missing,
+      },
+    });
+  });
+
+  // Root endpoint for quick status
+  app.get("/", (_req: Request, res: Response) => {
+    const envCheck = checkEnvVars();
+    res.json({
+      name: "jarvis-mcp-server",
+      version: "0.1.0",
+      status: envCheck.missing.length === 0 ? "ready" : "missing env vars",
+      endpoints: {
+        mcp: "POST /mcp",
+        health: "GET /health",
+      },
+      missing_env_vars: envCheck.missing,
+    });
+  });
 
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // Stateless
@@ -357,6 +408,12 @@ async function main() {
 
   app.listen(PORT, () => {
     console.log(`MCP server listening on http://localhost:${PORT}/mcp`);
+    const envCheck = checkEnvVars();
+    if (envCheck.missing.length > 0) {
+      console.warn(`⚠️  Missing env vars: ${envCheck.missing.join(", ")}`);
+    } else {
+      console.log("✅ All required env vars are set");
+    }
   });
 }
 
