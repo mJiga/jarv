@@ -6,6 +6,7 @@ import { notion, PAYMENTS_DB_ID, EXPENSES_DB_ID } from "../notion/client";
 import {
   find_account_page_by_title,
   query_data_source_with_filter,
+  find_recent_duplicate_payment,
   validate_category,
   ensure_category_page,
 } from "../notion/utils";
@@ -122,6 +123,26 @@ export async function create_payment(
     }
 
     const iso_date = input.date || new Date().toISOString().slice(0, 10);
+
+    // Check for duplicate payment before creating
+    const duplicate_id = await find_recent_duplicate_payment(
+      PAYMENTS_DB_ID,
+      input.amount,
+      from_account_page_id,
+      to_account_page_id,
+      iso_date
+    );
+
+    if (duplicate_id) {
+      return {
+        success: true,
+        payment_id: duplicate_id,
+        cleared_expenses: [],
+        cleared_total: 0,
+        remaining_unapplied: 0,
+        message: `Duplicate detected: payment of $${input.amount} from ${from_account} to ${to_account} already exists (created within last 5 minutes).`,
+      };
+    }
 
     // Handle optional category
     const category_name = input.category

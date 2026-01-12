@@ -7,6 +7,7 @@ import {
   find_account_page_by_title,
   ensure_category_page,
   find_budget_rule_pages_by_title,
+  find_recent_duplicate,
   transaction_type,
   income_db_fields,
   validate_category,
@@ -190,6 +191,22 @@ export async function add_transaction(
     let response;
 
     if (input.transaction_type === "expense") {
+      // Check for duplicate expense before creating
+      const duplicate_id = await find_recent_duplicate(
+        EXPENSES_DB_ID,
+        input.amount,
+        account_page_id,
+        iso_date
+      );
+
+      if (duplicate_id) {
+        return {
+          success: true,
+          transaction_id: duplicate_id,
+          message: `Duplicate detected: expense of $${input.amount} to ${account_name} already exists (created within last 5 minutes).`,
+        };
+      }
+
       // Create expense page
       const properties: any = {
         title: { title: [{ text: { content: title } }] },
@@ -214,6 +231,22 @@ export async function add_transaction(
         properties,
       });
     } else {
+      // Check for duplicate income before creating
+      const duplicate_id = await find_recent_duplicate(
+        INCOME_DB_ID,
+        input.amount,
+        account_page_id,
+        iso_date
+      );
+
+      if (duplicate_id) {
+        return {
+          success: true,
+          transaction_id: duplicate_id,
+          message: `Duplicate detected: income of $${input.amount} to ${account_name} already exists (created within last 5 minutes).`,
+        };
+      }
+
       // Create income page - requires matching budget rule for this account
       const budget_name = input.budget || "default";
       const budget_pages = await find_budget_rule_pages_by_title(budget_name);

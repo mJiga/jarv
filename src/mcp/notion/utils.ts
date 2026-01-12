@@ -222,6 +222,100 @@ export function get_page_title_text(page: any): string {
 }
 
 // -----------------------------------------------------------------------------
+// Duplicate Detection
+// -----------------------------------------------------------------------------
+
+/**
+ * Checks for a recent duplicate transaction in a Notion database.
+ * Returns the existing page ID if a match is found, null otherwise.
+ *
+ * A transaction is considered a duplicate if ALL match within the time window:
+ * - amount (exact match)
+ * - account (relation contains the account page ID)
+ * - date (transaction date)
+ * - created_time (within the last N minutes)
+ */
+export async function find_recent_duplicate(
+  db_id: string,
+  amount: number,
+  account_page_id: string,
+  date: string,
+  window_minutes: number = 5
+): Promise<string | null> {
+  try {
+    const cutoff = new Date(Date.now() - window_minutes * 60 * 1000);
+    const cutoff_iso = cutoff.toISOString();
+
+    const results = await query_data_source_with_filter(
+      db_id,
+      {
+        and: [
+          { property: "amount", number: { equals: amount } },
+          { property: "accounts", relation: { contains: account_page_id } },
+          { property: "date", date: { equals: date } },
+          { timestamp: "created_time", created_time: { on_or_after: cutoff_iso } },
+        ],
+      },
+      [{ timestamp: "created_time", direction: "descending" }],
+      1
+    );
+
+    if (results.length > 0) {
+      return results[0].id;
+    }
+
+    return null;
+  } catch (err) {
+    console.error("[dedup] Error checking for duplicate:", err);
+    // On error, allow the transaction to proceed (fail open)
+    return null;
+  }
+}
+
+/**
+ * Checks for a recent duplicate payment in the Payments DB.
+ * Payments use from_account and to_account instead of a single accounts relation.
+ */
+export async function find_recent_duplicate_payment(
+  db_id: string,
+  amount: number,
+  from_account_page_id: string,
+  to_account_page_id: string,
+  date: string,
+  window_minutes: number = 5
+): Promise<string | null> {
+  try {
+    const cutoff = new Date(Date.now() - window_minutes * 60 * 1000);
+    const cutoff_iso = cutoff.toISOString();
+
+    const results = await query_data_source_with_filter(
+      db_id,
+      {
+        and: [
+          { property: "amount", number: { equals: amount } },
+          { property: "from_account", relation: { contains: from_account_page_id } },
+          { property: "to_account", relation: { contains: to_account_page_id } },
+          { property: "date", date: { equals: date } },
+          { timestamp: "created_time", created_time: { on_or_after: cutoff_iso } },
+        ],
+      },
+      [{ timestamp: "created_time", direction: "descending" }],
+      1
+    );
+
+    if (results.length > 0) {
+      return results[0].id;
+    }
+
+    return null;
+  } catch (err) {
+    console.error("[dedup] Error checking for duplicate payment:", err);
+    // On error, allow the payment to proceed (fail open)
+    return null;
+  }
+}
+
+// -----------------------------------------------------------------------------
 // Shared Types
 // -----------------------------------------------------------------------------
 
