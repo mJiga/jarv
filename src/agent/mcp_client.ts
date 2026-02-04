@@ -4,31 +4,29 @@
 
 import "dotenv/config";
 import crypto from "crypto";
+import type {
+  account_type,
+  funding_account_type,
+  credit_card_account_type,
+  transaction_type,
+} from "../mcp/constants";
 
 const MCP_BASE_URL = process.env.MCP_BASE_URL ?? "http://localhost:3000";
 
 // -----------------------------------------------------------------------------
-// Types
+// Types — derived from constants to prevent drift
 // -----------------------------------------------------------------------------
 
 export interface add_transaction_args {
   amount: number;
-  transaction_type: "expense" | "income" | "payment";
-  account?:
-    | "checkings"
-    | "short term savings"
-    | "bills"
-    | "freedom unlimited"
-    | "sapphire"
-    | "brokerage"
-    | "roth ira"
-    | "spaxx";
+  transaction_type: transaction_type;
+  account?: account_type;
   category?: string;
   date?: string;
   note?: string;
-  funding_account?: "checkings" | "bills" | "short term savings";
-  from_account?: "checkings" | "bills" | "short term savings";
-  to_account?: "sapphire" | "freedom unlimited";
+  funding_account?: funding_account_type;
+  from_account?: funding_account_type;
+  to_account?: credit_card_account_type;
   pre_breakdown?: number;
   budget?: string;
 }
@@ -62,6 +60,11 @@ export interface update_transaction_categories_batch_args {
 // Core Client
 // -----------------------------------------------------------------------------
 
+interface mcp_tool_result {
+  raw: Record<string, unknown>;
+  message: string;
+}
+
 /**
  * Calls an MCP tool via JSON-RPC.
  * Handles SSE responses (text/event-stream) by parsing data lines.
@@ -70,7 +73,7 @@ async function call_mcp_tool<T extends object>(
   tool_name: string,
   args: T,
   fallback_message: string
-): Promise<{ raw: any; message: string }> {
+): Promise<mcp_tool_result> {
   const body = {
     jsonrpc: "2.0",
     id: crypto.randomUUID(),
@@ -93,7 +96,7 @@ async function call_mcp_tool<T extends object>(
   }
 
   const content_type = res.headers.get("content-type") ?? "";
-  let data: any;
+  let data: Record<string, unknown>;
 
   if (content_type.includes("text/event-stream")) {
     // Parse SSE: extract last "data:" line
@@ -111,19 +114,22 @@ async function call_mcp_tool<T extends object>(
     if (!lastLine) {
       throw new Error("No valid data line found in SSE response from MCP");
     }
-    data = JSON.parse(lastLine.slice("data:".length).trim());
+    data = JSON.parse(lastLine.slice("data:".length).trim()) as Record<string, unknown>;
   } else {
-    data = await res.json();
+    data = (await res.json()) as Record<string, unknown>;
   }
 
-  if (data.error) {
-    throw new Error(`MCP JSON-RPC error: ${data.error.code} ${data.error.message}`);
+  const error = data.error as { code?: number; message?: string } | undefined;
+  if (error) {
+    throw new Error(`MCP JSON-RPC error: ${error.code} ${error.message}`);
   }
 
   // Extract text content from response
+  const result = data.result as Record<string, unknown> | undefined;
+  const content = result?.content as Array<{ type?: string; text?: string }> | undefined;
   const text_result =
-    data.result?.content?.[0]?.text ??
-    data.result?.content?.find?.((c: any) => c?.type === "text")?.text ??
+    content?.[0]?.text ??
+    content?.find?.((c) => c?.type === "text")?.text ??
     fallback_message;
 
   return { raw: data, message: text_result as string };

@@ -1,6 +1,6 @@
 // src/mcp/notion/utils.ts
 // Notion query helpers and shared utilities.
-// Handles category caching, page lookups, and common query patterns.
+// Handles category caching, page lookups, data source caching, and common query patterns.
 
 import {
   notion,
@@ -8,33 +8,45 @@ import {
   CATEGORIES_DB_ID,
   BUDGET_RULES_DB_ID,
 } from "./client";
+import {
+  FALLBACK_CATEGORIES,
+  CATEGORY_CACHE_TTL_MS,
+  DATA_SOURCE_CACHE_TTL_MS,
+  ACCOUNT_CACHE_TTL_MS,
+  DEDUP_WINDOW_MINUTES,
+} from "../constants";
+import {
+  with_data_sources,
+  get_title_text,
+  type notion_page,
+  type data_source_query_params,
+} from "./types";
+
+// Typed wrapper — single escape hatch for the untyped dataSources API
+const ds_client = with_data_sources(notion);
+
+// -----------------------------------------------------------------------------
+// Cache infrastructure
+// -----------------------------------------------------------------------------
+
+interface cache_entry<T> {
+  value: T;
+  timestamp: number;
+}
+
+/** Data source ID cache — eliminates ~4 redundant Notion API calls per transaction */
+const data_source_id_cache = new Map<string, cache_entry<string>>();
+
+/** Account page ID cache — accounts rarely change */
+const account_page_id_cache = new Map<string, cache_entry<string>>();
+
+// Category cache
+let cached_categories: string[] | null = null;
+let cache_timestamp: number = 0;
 
 // -----------------------------------------------------------------------------
 // Category Management
 // -----------------------------------------------------------------------------
-
-// Fallback if Notion fetch fails - ensures system remains functional
-const FALLBACK_CATEGORIES = [
-  "paycheck",
-  "out",
-  "lyft",
-  "shopping",
-  "concerts",
-  "zelle",
-  "health",
-  "groceries",
-  "att",
-  "chatgpt",
-  "house",
-  "car",
-  "gas",
-  "other",
-] as const;
-
-// In-memory cache to reduce Notion API calls
-let cached_categories: string[] | null = null;
-let cache_timestamp: number = 0;
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
  * Fetches category list from Notion with caching.
@@ -44,7 +56,7 @@ const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 export async function get_available_categories(): Promise<string[]> {
   const now = Date.now();
 
-  if (cached_categories && now - cache_timestamp < CACHE_TTL_MS) {
+  if (cached_categories && now - cache_timestamp < CATEGORY_CACHE_TTL_MS) {
     return cached_categories;
   }
 
@@ -53,18 +65,16 @@ export async function get_available_categories(): Promise<string[]> {
       CATEGORIES_DB_ID
     );
 
-    const response = await (notion as any).dataSources.query({
+    const response = await ds_client.dataSources.query({
       data_source_id,
       page_size: 100,
     });
 
     const categories: string[] = (response.results || [])
-      .map((page: any) => {
-        const title = page?.properties?.title?.title;
-        if (!Array.isArray(title) || title.length === 0) return null;
-        return (title[0]?.plain_text ?? "").trim().toLowerCase();
+      .map((page) => {
+        return get_title_text(page).trim().toLowerCase();
       })
-      .filter((cat: string | null): cat is string => !!cat);
+      .filter((cat): cat is string => !!cat);
 
     // Ensure "other" always exists as the catch-all category
     if (!categories.includes("other")) {
@@ -83,11 +93,12 @@ export async function get_available_categories(): Promise<string[]> {
 
 /**
  * Validates and normalizes a category string.
+ * Async to ensure the category cache is warm before checking.
  * Unknown categories are coerced to "other" to prevent invalid data.
  */
-export function validate_category(category: string): string {
+export async function validate_category(category: string): Promise<string> {
   const normalized = (category ?? "").trim().toLowerCase();
-  const available: readonly string[] = cached_categories ?? FALLBACK_CATEGORIES;
+  const available = await get_available_categories();
   return available.includes(normalized) ? normalized : "other";
 }
 
@@ -97,19 +108,32 @@ export function validate_category(category: string): string {
 
 /**
  * Retrieves the data source ID for a Notion database.
- * Required for using the dataSources.query API.
+ * Cached — data source IDs are stable and almost never change.
  */
 export async function get_data_source_id_for_database(
   database_id: string
 ): Promise<string> {
-  const db: any = await notion.databases.retrieve({ database_id });
-  const ds = db.data_sources?.[0];
-  if (!ds) {
+  const cached = data_source_id_cache.get(database_id);
+  if (cached && Date.now() - cached.timestamp < DATA_SOURCE_CACHE_TTL_MS) {
+    return cached.value;
+  }
+
+  const db = await notion.databases.retrieve({ database_id });
+  const ds = (db as Record<string, unknown> & typeof db).data_sources as
+    | Array<{ id: string }>
+    | undefined;
+  const first_ds = ds?.[0];
+  if (!first_ds) {
     throw new Error(
       `No data source attached to database ${database_id}. Check Notion setup.`
     );
   }
-  return ds.id;
+
+  data_source_id_cache.set(database_id, {
+    value: first_ds.id,
+    timestamp: Date.now(),
+  });
+  return first_ds.id;
 }
 
 /**
@@ -120,10 +144,10 @@ export async function query_data_source_by_title(
   database_id: string,
   title: string,
   page_size = 1
-): Promise<any[]> {
+): Promise<notion_page[]> {
   const data_source_id = await get_data_source_id_for_database(database_id);
 
-  const res = await (notion as any).dataSources.query({
+  const res = await ds_client.dataSources.query({
     data_source_id,
     filter: {
       property: "title",
@@ -141,13 +165,13 @@ export async function query_data_source_by_title(
  */
 export async function query_data_source_with_filter(
   database_id: string,
-  filter: any,
-  sorts?: any[],
+  filter: data_source_query_params["filter"],
+  sorts?: data_source_query_params["sorts"],
   page_size = 100
-): Promise<any[]> {
+): Promise<notion_page[]> {
   const data_source_id = await get_data_source_id_for_database(database_id);
 
-  const query_params: any = {
+  const query_params: data_source_query_params = {
     data_source_id,
     filter,
     page_size,
@@ -157,7 +181,7 @@ export async function query_data_source_with_filter(
     query_params.sorts = sorts;
   }
 
-  const res = await (notion as any).dataSources.query(query_params);
+  const res = await ds_client.dataSources.query(query_params);
 
   return res.results;
 }
@@ -166,12 +190,26 @@ export async function query_data_source_with_filter(
 // Page Lookups
 // -----------------------------------------------------------------------------
 
-/** Resolves an account page ID by its title (e.g., "checkings") */
+/**
+ * Resolves an account page ID by its title (e.g., "checkings").
+ * Cached — account pages rarely change.
+ */
 export async function find_account_page_by_title(
   title: string
 ): Promise<string | null> {
+  const cached = account_page_id_cache.get(title);
+  if (cached && Date.now() - cached.timestamp < ACCOUNT_CACHE_TTL_MS) {
+    return cached.value;
+  }
+
   const results = await query_data_source_by_title(ACCOUNTS_DB_ID, title, 1);
-  return results[0]?.id ?? null;
+  const id = results[0]?.id ?? null;
+
+  if (id) {
+    account_page_id_cache.set(title, { value: id, timestamp: Date.now() });
+  }
+
+  return id;
 }
 
 /** Resolves a category page ID by its title (e.g., "groceries") */
@@ -206,7 +244,7 @@ export async function ensure_category_page(title: string): Promise<string> {
 /** Finds all budget rule pages for a given rule name (up to 100 allocations) */
 export async function find_budget_rule_pages_by_title(
   rule_name: string
-): Promise<any[]> {
+): Promise<notion_page[]> {
   return await query_data_source_by_title(BUDGET_RULES_DB_ID, rule_name, 100);
 }
 
@@ -215,10 +253,8 @@ export async function find_budget_rule_pages_by_title(
 // -----------------------------------------------------------------------------
 
 /** Extracts plain text from a Notion page title property */
-export function get_page_title_text(page: any): string {
-  const title = page?.properties?.title?.title;
-  if (!Array.isArray(title) || title.length === 0) return "";
-  return title[0]?.plain_text ?? "";
+export function get_page_title_text(page: Record<string, unknown>): string {
+  return get_title_text(page as unknown as notion_page);
 }
 
 // -----------------------------------------------------------------------------
@@ -240,7 +276,7 @@ export async function find_recent_duplicate(
   amount: number,
   account_page_id: string,
   date: string,
-  window_minutes: number = 5
+  window_minutes: number = DEDUP_WINDOW_MINUTES
 ): Promise<string | null> {
   try {
     const cutoff = new Date(Date.now() - window_minutes * 60 * 1000);
@@ -261,7 +297,7 @@ export async function find_recent_duplicate(
     );
 
     if (results.length > 0) {
-      return results[0].id;
+      return results[0]?.id ?? null;
     }
 
     return null;
@@ -282,7 +318,7 @@ export async function find_recent_duplicate_payment(
   from_account_page_id: string,
   to_account_page_id: string,
   date: string,
-  window_minutes: number = 5
+  window_minutes: number = DEDUP_WINDOW_MINUTES
 ): Promise<string | null> {
   try {
     const cutoff = new Date(Date.now() - window_minutes * 60 * 1000);
@@ -304,7 +340,7 @@ export async function find_recent_duplicate_payment(
     );
 
     if (results.length > 0) {
-      return results[0].id;
+      return results[0]?.id ?? null;
     }
 
     return null;
@@ -318,9 +354,6 @@ export async function find_recent_duplicate_payment(
 // -----------------------------------------------------------------------------
 // Shared Types
 // -----------------------------------------------------------------------------
-
-/** Transaction types supported by add_transaction */
-export type transaction_type = "expense" | "income" | "payment";
 
 /** Fields stored on income rows in Notion. Shared by transactions and budgets. */
 export interface income_db_fields {

@@ -13,9 +13,16 @@ import {
 import {
   FUNDING_ACCOUNTS,
   CREDIT_CARD_ACCOUNTS,
+  DEFAULT_PAYMENT_FROM,
+  DEFAULT_PAYMENT_TO,
   is_valid_funding_account,
   is_valid_credit_card_account,
 } from "../constants";
+import {
+  get_number_prop,
+  get_rich_text_prop,
+  get_formula_number_prop,
+} from "../notion/types";
 
 // -----------------------------------------------------------------------------
 // Types
@@ -23,8 +30,8 @@ import {
 
 export interface create_payment_input {
   amount: number;
-  from_account?: string | undefined; // Source: checkings, bills, etc. Default: checkings
-  to_account?: string | undefined; // Destination: sapphire, freedom unlimited. Default: sapphire
+  from_account?: string | undefined; // Source: checkings, bills, etc.
+  to_account?: string | undefined; // Destination: sapphire, freedom unlimited.
   date?: string | undefined; // ISO date. Default: today
   note?: string | undefined;
   category?: string | undefined;
@@ -75,8 +82,8 @@ export async function create_payment(
       };
     }
 
-    const from_account = input.from_account || "checkings";
-    const to_account = input.to_account || "sapphire";
+    const from_account = input.from_account || DEFAULT_PAYMENT_FROM;
+    const to_account = input.to_account || DEFAULT_PAYMENT_TO;
 
     // Validate account types
     if (!is_valid_funding_account(from_account)) {
@@ -146,7 +153,7 @@ export async function create_payment(
 
     // Handle optional category
     const category_name = input.category
-      ? validate_category(input.category)
+      ? await validate_category(input.category)
       : null;
     let category_page_id: string | null = null;
     if (category_name) {
@@ -156,7 +163,7 @@ export async function create_payment(
     const title = `payment $${input.amount} ${from_account} -> ${to_account}`;
 
     // Step 1: Create payment page
-    const payment_properties: any = {
+    const payment_properties: Record<string, unknown> = {
       title: { title: [{ text: { content: title } }] },
       amount: { number: input.amount },
       date: { date: { start: iso_date } },
@@ -178,7 +185,8 @@ export async function create_payment(
 
     const payment_response = await notion.pages.create({
       parent: { database_id: PAYMENTS_DB_ID },
-      properties: payment_properties,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      properties: payment_properties as any,
     });
 
     const payment_id = payment_response.id;
@@ -211,14 +219,14 @@ export async function create_payment(
     for (const page of expenses_results) {
       if (remaining <= 0) break;
 
-      const props = (page as any).properties;
-      const expense_amount = props.amount?.number;
+      const props = page.properties;
+      const expense_amount = get_number_prop(props, "amount");
 
       if (typeof expense_amount !== "number" || expense_amount <= 0) continue;
 
       // Calculate what's still owed on this expense
-      const owed_amount_prop = props.owed_amount?.formula?.number;
-      const existing_paid = props.paid_amount?.number || 0;
+      const owed_amount_prop = get_formula_number_prop(props, "owed_amount");
+      const existing_paid = get_number_prop(props, "paid_amount") || 0;
       const owed_amount =
         typeof owed_amount_prop === "number"
           ? owed_amount_prop
@@ -226,8 +234,7 @@ export async function create_payment(
 
       if (owed_amount <= 0) continue; // Already fully paid
 
-      const expense_note =
-        props.note?.rich_text?.[0]?.text?.content || undefined;
+      const expense_note = get_rich_text_prop(props, "note") || undefined;
 
       if (remaining >= owed_amount) {
         // Fully clear this expense
@@ -293,11 +300,13 @@ export async function create_payment(
       remaining_unapplied: remaining,
       message: `Created payment of $${input.amount}. Cleared ${cleared_expenses.length} expense(s) totaling $${cleared_total}. Remaining unapplied: $${remaining}.`,
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : "unknown error while creating payment.";
     console.error("[payments] Error in create_payment:", err);
     return {
       success: false,
-      error: err?.message || "unknown error while creating payment.",
+      error: message,
       cleared_expenses: [],
       cleared_total: 0,
       remaining_unapplied: 0,

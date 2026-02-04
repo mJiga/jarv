@@ -7,7 +7,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 
-import { ACCOUNTS, FUNDING_ACCOUNTS, CREDIT_CARD_ACCOUNTS } from "./constants";
+import {
+  ACCOUNTS,
+  FUNDING_ACCOUNTS,
+  CREDIT_CARD_ACCOUNTS,
+  REQUEST_BODY_LIMIT,
+} from "./constants";
 import {
   add_transaction,
   add_transactions_batch,
@@ -88,7 +93,7 @@ server.registerTool(
       "Add an expense, income, or payment to Notion. Payments auto-clear matching expenses.",
     inputSchema: add_transaction_schema,
   },
-  async (args) => {
+  async (args: Record<string, unknown>) => {
     console.log("[MCP] add_transaction", new Date().toISOString(), JSON.stringify(args));
 
     const parsed = add_transaction_schema.parse(args) as add_transaction_input;
@@ -101,7 +106,7 @@ server.registerTool(
       };
     }
 
-    const structured: any = {
+    const structured: Record<string, unknown> = {
       transaction_id: result.transaction_id,
       amount: parsed.amount,
       transaction_type: parsed.transaction_type,
@@ -128,7 +133,7 @@ server.registerTool(
     description: "Batch add expense/income/payment transactions.",
     inputSchema: add_transactions_batch_schema,
   },
-  async (args) => {
+  async (args: Record<string, unknown>) => {
     console.log("[MCP] add_transactions_batch", new Date().toISOString(), JSON.stringify(args));
 
     const parsed = add_transactions_batch_schema.parse(args);
@@ -160,7 +165,7 @@ server.registerTool(
     description: "Create or update a budget rule for paycheck splitting.",
     inputSchema: set_budget_rule_schema,
   },
-  async (args) => {
+  async (args: Record<string, unknown>) => {
     console.log("[MCP] set_budget_rule", new Date().toISOString(), JSON.stringify(args));
 
     const parsed = set_budget_rule_schema.parse(args);
@@ -187,7 +192,7 @@ server.registerTool(
     description: "Split paycheck across accounts using a budget rule.",
     inputSchema: split_paycheck_schema,
   },
-  async (args) => {
+  async (args: Record<string, unknown>) => {
     console.log("[MCP] split_paycheck", new Date().toISOString(), JSON.stringify(args));
 
     const parsed = split_paycheck_schema.parse(args);
@@ -201,7 +206,7 @@ server.registerTool(
     }
 
     const entries_summary = result.entries
-      .map((e: any) => `${e.account}: $${e.amount}`)
+      .map((e) => `${e.account}: $${e.amount}`)
       .join(", ");
 
     return {
@@ -281,7 +286,7 @@ server.registerTool(
     description: "Update category of one expense by ID.",
     inputSchema: update_category_schema,
   },
-  async (args) => {
+  async (args: Record<string, unknown>) => {
     console.log("[MCP] update_transaction_category", new Date().toISOString(), JSON.stringify(args));
 
     const parsed = update_category_schema.parse(args);
@@ -308,7 +313,7 @@ server.registerTool(
     description: "Update categories for multiple expenses at once.",
     inputSchema: update_categories_batch_schema,
   },
-  async (args) => {
+  async (args: Record<string, unknown>) => {
     console.log("[MCP] update_transaction_categories_batch", new Date().toISOString(), JSON.stringify(args));
 
     const parsed = update_categories_batch_schema.parse(args);
@@ -355,7 +360,7 @@ function checkEnvVars(): { missing: string[]; set: string[] } {
 
 async function main() {
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: REQUEST_BODY_LIMIT }));
 
   // Health check endpoint
   app.get("/health", (_req: Request, res: Response) => {
@@ -406,15 +411,32 @@ async function main() {
     }
   });
 
-  app.listen(PORT, () => {
+  const http_server = app.listen(PORT, () => {
     console.log(`MCP server listening on http://localhost:${PORT}/mcp`);
     const envCheck = checkEnvVars();
     if (envCheck.missing.length > 0) {
-      console.warn(`⚠️  Missing env vars: ${envCheck.missing.join(", ")}`);
+      console.warn(`Missing env vars: ${envCheck.missing.join(", ")}`);
     } else {
-      console.log("✅ All required env vars are set");
+      console.log("All required env vars are set");
     }
   });
+
+  // Graceful shutdown — drain active requests on SIGTERM/SIGINT
+  const shutdown = () => {
+    console.log("Shutting down gracefully...");
+    http_server.close(() => {
+      console.log("HTTP server closed.");
+      process.exit(0);
+    });
+    // Force exit after 10 seconds if connections don't close
+    setTimeout(() => {
+      console.error("Forced shutdown after timeout.");
+      process.exit(1);
+    }, 10_000);
+  };
+
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
 }
 
 main().catch((err) => {

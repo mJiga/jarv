@@ -10,6 +10,7 @@ import {
   CREDIT_CARD_ACCOUNTS,
   TRANSACTION_TYPES,
   CATEGORY_FUNDING_MAP,
+  KNOWN_BUDGET_NAMES,
   account_type,
   funding_account_type,
   credit_card_account_type,
@@ -33,13 +34,13 @@ export type parsed_action =
       args: {
         amount: number;
         transaction_type: transaction_type;
-        account?: account_type;
-        category?: string;
-        date?: string;
-        note?: string;
-        funding_account?: funding_account_type;
-        from_account?: funding_account_type;
-        to_account?: credit_card_account_type;
+        account?: account_type | undefined;
+        category?: string | undefined;
+        date?: string | undefined;
+        note?: string | undefined;
+        funding_account?: funding_account_type | undefined;
+        from_account?: funding_account_type | undefined;
+        to_account?: credit_card_account_type | undefined;
       };
     }
   | {
@@ -48,13 +49,13 @@ export type parsed_action =
         transactions: Array<{
           amount: number;
           transaction_type: transaction_type;
-          account?: account_type;
-          category?: string;
-          date?: string;
-          note?: string;
-          funding_account?: funding_account_type;
-          from_account?: funding_account_type;
-          to_account?: credit_card_account_type;
+          account?: account_type | undefined;
+          category?: string | undefined;
+          date?: string | undefined;
+          note?: string | undefined;
+          funding_account?: funding_account_type | undefined;
+          from_account?: funding_account_type | undefined;
+          to_account?: credit_card_account_type | undefined;
         }>;
       };
     }
@@ -69,9 +70,9 @@ export type parsed_action =
       action: "split_paycheck";
       args: {
         gross_amount: number;
-        budget_name?: string;
-        date?: string;
-        description?: string;
+        budget_name?: string | undefined;
+        date?: string | undefined;
+        description?: string | undefined;
       };
     }
   | { action: "get_uncategorized_transactions"; args: Record<string, never> }
@@ -84,7 +85,7 @@ export type parsed_action =
       action: "update_transaction_categories_batch";
       args: { updates: Array<{ expense_id: string; category: string }> };
     }
-  | { action: "unknown"; reason?: string };
+  | { action: "unknown"; reason?: string | undefined };
 
 // -----------------------------------------------------------------------------
 // Prompt Construction
@@ -92,7 +93,7 @@ export type parsed_action =
 
 /**
  * Builds the system prompt for action inference.
- * Uses global constants for account lists to stay in sync with MCP server.
+ * Uses global constants for account lists and budget names to stay in sync.
  */
 function build_prompt(user_message: string): string {
   const today = new Date();
@@ -115,6 +116,9 @@ function build_prompt(user_message: string): string {
   const category_funding_entries = Object.entries(CATEGORY_FUNDING_MAP)
     .map(([cat, fund]) => `${cat} -> ${fund}`)
     .join(", ");
+
+  // Build known budget names from constants
+  const budget_names_list = KNOWN_BUDGET_NAMES.join('", "');
 
   return `
 You are a finance command parser for my personal expense tracker.
@@ -142,7 +146,7 @@ You can ONLY choose between these actions:
   * For credit card payments: set transaction_type to "payment" (must mention a credit card name like sapphire/freedom OR say "credit card payment")
 - "add_transaction_batch": when the user wants to add MULTIPLE transactions at once, OR when importing from a statement/image.
 - "set_budget_rule": ONLY when the user wants to CREATE or UPDATE budget allocation percentages.
-- "split_paycheck": ONLY when the user mentions a SPECIFIC EMPLOYER/INCOME SOURCE name. Known budget names: "hunt", "msft", "default".
+- "split_paycheck": ONLY when the user mentions a SPECIFIC EMPLOYER/INCOME SOURCE name. Known budget names: "${budget_names_list}".
 - "get_uncategorized_transactions": when user asks to review/clean up the inbox, see what's in "other", or sort uncategorized transactions.
 - "get_categories": when you need to know the valid expense categories. Returns the list of categories from the database.
 - "update_transaction_category": when the user wants to change the category of a specific transaction by ID.
@@ -213,15 +217,15 @@ ${user_message}
 // -----------------------------------------------------------------------------
 
 /** Extracts JSON from model response, handling code fences */
-function extract_json(text: string): any {
+function extract_json(text: string): unknown {
   const trimmed = text.trim();
   const code_fence_match = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const json_text = code_fence_match ? code_fence_match[1] : trimmed;
+  const json_text = code_fence_match?.[1] ?? trimmed;
 
   if (!json_text) {
     throw new Error("Invalid JSON: input is undefined");
   }
-  return JSON.parse(json_text);
+  return JSON.parse(json_text) as unknown;
 }
 
 // -----------------------------------------------------------------------------
@@ -245,64 +249,71 @@ export async function infer_action(
   console.log("[Gemini] Raw response:", text);
 
   try {
-    const parsed = extract_json(text);
+    const parsed = extract_json(text) as Record<string, unknown>;
     console.log("[Gemini] Parsed JSON:", JSON.stringify(parsed, null, 2));
 
     // Validate and return typed action
     if (parsed.action === "add_transaction" && parsed.args) {
-      const a = parsed.args;
+      const a = parsed.args as Record<string, unknown>;
       if (
         typeof a.amount === "number" &&
-        TRANSACTION_TYPES.includes(a.transaction_type)
+        typeof a.transaction_type === "string" &&
+        TRANSACTION_TYPES.includes(a.transaction_type as transaction_type)
       ) {
-        const is_valid_date =
-          typeof a.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(a.date);
+        const date_str = typeof a.date === "string" ? a.date : "";
+        const is_valid_date = /^\d{4}-\d{2}-\d{2}$/.test(date_str);
 
         return {
           action: "add_transaction",
           args: {
             amount: a.amount,
-            transaction_type: a.transaction_type,
-            account: typeof a.account === "string" ? a.account : undefined,
-            category: a.category,
-            date: is_valid_date ? a.date : undefined,
+            transaction_type: a.transaction_type as transaction_type,
+            account: typeof a.account === "string" ? a.account as account_type : undefined,
+            category: typeof a.category === "string" ? a.category : undefined,
+            date: is_valid_date ? date_str : undefined,
             note: typeof a.note === "string" ? a.note : undefined,
             funding_account:
               typeof a.funding_account === "string"
-                ? a.funding_account
+                ? a.funding_account as funding_account_type
                 : undefined,
             from_account:
-              typeof a.from_account === "string" ? a.from_account : undefined,
+              typeof a.from_account === "string" ? a.from_account as funding_account_type : undefined,
             to_account:
-              typeof a.to_account === "string" ? a.to_account : undefined,
+              typeof a.to_account === "string" ? a.to_account as credit_card_account_type : undefined,
           },
         };
       }
     }
 
     if (parsed.action === "add_transaction_batch" && parsed.args) {
-      const a = parsed.args;
+      const a = parsed.args as Record<string, unknown>;
       if (Array.isArray(a.transactions) && a.transactions.length > 0) {
-        const validated_transactions = a.transactions.map((t: any) => {
-          const is_valid_date =
-            typeof t.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(t.date);
+        const validated_transactions = (a.transactions as Array<Record<string, unknown>>).map((t) => {
+          const t_date_str = typeof t.date === "string" ? t.date : "";
+          const is_valid_date = /^\d{4}-\d{2}-\d{2}$/.test(t_date_str);
 
-          return {
-            amount: t.amount,
-            transaction_type: t.transaction_type,
-            account: typeof t.account === "string" ? t.account : undefined,
-            category: t.category,
-            date: is_valid_date ? t.date : undefined,
-            note: typeof t.note === "string" ? t.note : undefined,
-            funding_account:
-              typeof t.funding_account === "string"
-                ? t.funding_account
-                : undefined,
-            from_account:
-              typeof t.from_account === "string" ? t.from_account : undefined,
-            to_account:
-              typeof t.to_account === "string" ? t.to_account : undefined,
+          const entry: {
+            amount: number;
+            transaction_type: transaction_type;
+            account?: account_type | undefined;
+            category?: string | undefined;
+            date?: string | undefined;
+            note?: string | undefined;
+            funding_account?: funding_account_type | undefined;
+            from_account?: funding_account_type | undefined;
+            to_account?: credit_card_account_type | undefined;
+          } = {
+            amount: t.amount as number,
+            transaction_type: t.transaction_type as transaction_type,
           };
+          if (typeof t.account === "string") entry.account = t.account as account_type;
+          if (typeof t.category === "string") entry.category = t.category;
+          if (is_valid_date) entry.date = t_date_str;
+          if (typeof t.note === "string") entry.note = t.note;
+          if (typeof t.funding_account === "string") entry.funding_account = t.funding_account as funding_account_type;
+          if (typeof t.from_account === "string") entry.from_account = t.from_account as funding_account_type;
+          if (typeof t.to_account === "string") entry.to_account = t.to_account as credit_card_account_type;
+          return entry;
         });
 
         return {
@@ -313,7 +324,7 @@ export async function infer_action(
     }
 
     if (parsed.action === "set_budget_rule" && parsed.args) {
-      const a = parsed.args;
+      const a = parsed.args as Record<string, unknown>;
       if (
         typeof a.budget_name === "string" &&
         Array.isArray(a.budgets) &&
@@ -321,16 +332,19 @@ export async function infer_action(
       ) {
         return {
           action: "set_budget_rule",
-          args: { budget_name: a.budget_name, budgets: a.budgets },
+          args: {
+            budget_name: a.budget_name,
+            budgets: a.budgets as Array<{ account: string; percentage: number }>,
+          },
         };
       }
     }
 
     if (parsed.action === "split_paycheck" && parsed.args) {
-      const a = parsed.args;
+      const a = parsed.args as Record<string, unknown>;
       if (typeof a.gross_amount === "number" && a.gross_amount > 0) {
-        const is_valid_date =
-          typeof a.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(a.date);
+        const sp_date_str = typeof a.date === "string" ? a.date : "";
+        const is_valid_date = /^\d{4}-\d{2}-\d{2}$/.test(sp_date_str);
 
         return {
           action: "split_paycheck",
@@ -338,7 +352,7 @@ export async function infer_action(
             gross_amount: a.gross_amount,
             budget_name:
               typeof a.budget_name === "string" ? a.budget_name : undefined,
-            date: is_valid_date ? a.date : undefined,
+            date: is_valid_date ? sp_date_str : undefined,
             description:
               typeof a.description === "string" ? a.description : undefined,
           },
@@ -355,7 +369,7 @@ export async function infer_action(
     }
 
     if (parsed.action === "update_transaction_category" && parsed.args) {
-      const a = parsed.args;
+      const a = parsed.args as Record<string, unknown>;
       if (
         typeof a.expense_id === "string" &&
         typeof a.category === "string" &&
@@ -372,12 +386,12 @@ export async function infer_action(
       parsed.action === "update_transaction_categories_batch" &&
       parsed.args
     ) {
-      const a = parsed.args;
+      const a = parsed.args as Record<string, unknown>;
       if (Array.isArray(a.updates) && a.updates.length > 0) {
-        const valid_updates = a.updates.filter(
-          (u: any) =>
+        const valid_updates = (a.updates as Array<Record<string, unknown>>).filter(
+          (u) =>
             typeof u.expense_id === "string" && typeof u.category === "string"
-        );
+        ) as Array<{ expense_id: string; category: string }>;
         if (valid_updates.length > 0) {
           return {
             action: "update_transaction_categories_batch",
@@ -391,8 +405,9 @@ export async function infer_action(
       action: "unknown",
       reason: "Parsed JSON did not match expected schema.",
     };
-  } catch (err: any) {
-    console.error("[Gemini] Failed to parse JSON:", err);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[Gemini] Failed to parse JSON:", message);
     return {
       action: "unknown",
       reason: "Failed to parse model output as JSON.",

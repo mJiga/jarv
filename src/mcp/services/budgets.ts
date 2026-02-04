@@ -14,6 +14,8 @@ import {
   add_transaction_result,
   income_db_fields,
 } from "./transactions";
+import { DEFAULT_BUDGET_NAME, DEFAULT_INCOME_ACCOUNT } from "../constants";
+import { get_number_prop, get_relation_prop } from "../notion/types";
 
 // -----------------------------------------------------------------------------
 // Types
@@ -41,7 +43,7 @@ export interface set_budget_rule_result {
 
 /**
  * Creates or updates a budget rule.
- * Archives existing rules with the same name before creating new ones.
+ * Creates new rules first, then archives old ones only on success (atomic).
  * Percentages must sum to 1.0 (100%).
  */
 export async function set_budget_rule(
@@ -63,7 +65,8 @@ export async function set_budget_rule(
       };
     }
 
-    // Validate all accounts exist
+    // Validate all accounts exist and cache their page IDs for reuse
+    const account_ids = new Map<string, string>();
     for (const b of budgets) {
       const account_page_id = await find_account_page_by_title(b.account);
       if (!account_page_id) {
@@ -72,20 +75,18 @@ export async function set_budget_rule(
           error: `account '${b.account}' not found in Accounts DB.`,
         };
       }
+      account_ids.set(b.account, account_page_id);
     }
 
-    // Archive existing rules with this name
-    const existing = await find_budget_rule_pages_by_title(budget_name);
-    for (const page of existing) {
-      await notion.pages.update({ page_id: page.id, archived: true });
-    }
-
-    // Create new rule pages (one per account allocation)
+    // Create new rule pages first (one per account allocation)
+    // This is done before archiving to ensure atomicity — if creation fails,
+    // old rules remain intact and no data is lost.
+    const created_page_ids: string[] = [];
     for (const b of budgets) {
-      const account_page_id = await find_account_page_by_title(b.account);
+      const account_page_id = account_ids.get(b.account);
       if (!account_page_id) continue;
 
-      await notion.pages.create({
+      const page = await notion.pages.create({
         parent: { database_id: BUDGET_RULES_DB_ID },
         properties: {
           title: { title: [{ text: { content: budget_name } }] },
@@ -93,17 +94,29 @@ export async function set_budget_rule(
           percentage: { number: b.percentage },
         },
       });
+      created_page_ids.push(page.id);
+    }
+
+    // Only archive old rules after all new ones are successfully created
+    const existing = await find_budget_rule_pages_by_title(budget_name);
+    for (const page of existing) {
+      // Don't archive the pages we just created
+      if (!created_page_ids.includes(page.id)) {
+        await notion.pages.update({ page_id: page.id, archived: true });
+      }
     }
 
     return {
       success: true,
       message: `set budget rule '${budget_name}' with ${budgets.length} allocations.`,
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : "unknown error while setting budget rule.";
     console.error("error setting budget rule:", err);
     return {
       success: false,
-      error: err?.message || "unknown error while setting budget rule.",
+      error: message,
     };
   }
 }
@@ -114,7 +127,7 @@ export async function set_budget_rule(
 
 export interface split_paycheck_input {
   gross_amount: number;
-  budget_name?: string | undefined; // Default: "default"
+  budget_name?: string | undefined; // Default from constants
   date?: string | undefined; // ISO date
   description?: string | undefined;
 }
@@ -156,7 +169,7 @@ export async function split_paycheck(
       };
     }
 
-    const budget_name = input.budget_name || "default";
+    const budget_name = input.budget_name || DEFAULT_BUDGET_NAME;
     const date = input.date || new Date().toISOString().slice(0, 10);
 
     const rule_pages = await find_budget_rule_pages_by_title(budget_name);
@@ -170,17 +183,20 @@ export async function split_paycheck(
     const entries: split_paycheck_entry[] = [];
 
     for (const page of rule_pages) {
-      const props: any = page.properties;
-      const percentage: number = props.percentage?.number ?? 0;
-      const relation = props.account?.relation?.[0];
+      const props = page.properties;
+      const percentage: number = get_number_prop(props, "percentage") ?? 0;
+      const relation = get_relation_prop(props, "account");
+      const first_relation = relation[0];
 
-      if (!relation || percentage <= 0) continue;
+      if (!first_relation || percentage <= 0) continue;
 
-      // Resolve account title from relation
+      // Resolve account title from relation — reuse the ID we already have
       const account_page = await notion.pages.retrieve({
-        page_id: relation.id,
+        page_id: first_relation.id,
       });
-      const account_title = get_page_title_text(account_page) || "checkings";
+      const account_title =
+        get_page_title_text(account_page as Record<string, unknown>) ||
+        DEFAULT_INCOME_ACCOUNT;
 
       const portion = Number((gross_amount * percentage).toFixed(2));
 
@@ -208,11 +224,13 @@ export async function split_paycheck(
     }
 
     return { success: true, gross_amount, budget_name, entries };
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : "unknown error while splitting paycheck.";
     console.error("error splitting paycheck:", err);
     return {
       success: false,
-      error: err?.message || "unknown error while splitting paycheck.",
+      error: message,
     };
   }
 }

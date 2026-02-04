@@ -2,7 +2,7 @@
   "name": "jarvis",
   "version": "1.0.0",
   "description": "Personal finance MCP server + LLM agent backed by Notion",
-  "main": "index.js",
+  "main": "dist/mcp/server.js",
   "scripts": {
     "build": "tsc",
     "start": "node dist/mcp/server.js",

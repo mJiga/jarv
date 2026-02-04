@@ -8,7 +8,6 @@ import {
   ensure_category_page,
   find_budget_rule_pages_by_title,
   find_recent_duplicate,
-  transaction_type,
   income_db_fields,
   validate_category,
 } from "../notion/utils";
@@ -16,15 +15,22 @@ import {
   ACCOUNTS,
   FUNDING_ACCOUNTS,
   CATEGORY_FUNDING_MAP,
+  DEFAULT_EXPENSE_ACCOUNT,
+  DEFAULT_INCOME_ACCOUNT,
+  DEFAULT_FUNDING_ACCOUNT,
+  DEFAULT_BUDGET_NAME,
   is_valid_account,
   is_valid_funding_account,
   is_valid_credit_card_account,
+  transaction_type,
 } from "../constants";
+import { is_notion_validation_error } from "../notion/types";
 import {
   create_payment,
   create_payment_result,
   cleared_expense_info,
 } from "./payments";
+import { get_relation_prop } from "../notion/types";
 
 export type { transaction_type, income_db_fields };
 
@@ -67,6 +73,10 @@ function build_title(input: add_transaction_input): string {
   if (input.transaction_type === "expense") {
     const cat = input.category || "other";
     return `expense ${amount_str} ${cat} (${acc})`;
+  }
+
+  if (input.transaction_type === "payment") {
+    return `payment ${amount_str} ${input.from_account} -> ${input.to_account}`;
   }
 
   // Income: prefer budget name in title if provided
@@ -121,13 +131,15 @@ export async function add_transaction(
       };
     }
 
-    // Resolve account (defaults: sapphire for expenses, checkings for income)
+    // Resolve account (defaults from constants)
     const default_account =
-      input.transaction_type === "expense" ? "sapphire" : "checkings";
+      input.transaction_type === "expense"
+        ? DEFAULT_EXPENSE_ACCOUNT
+        : DEFAULT_INCOME_ACCOUNT;
     const account_name = input.account || default_account;
 
     // Validate category - unknown values become "other"
-    const category_name = validate_category(input.category ?? "");
+    const category_name = await validate_category(input.category ?? "");
 
     if (!is_valid_account(account_name)) {
       return {
@@ -151,11 +163,11 @@ export async function add_transaction(
     let funding_account_page_id: string | null = null;
 
     if (input.transaction_type === "expense" && is_credit_card) {
-      // Priority: explicit input > category mapping > default checkings
+      // Priority: explicit input > category mapping > default from constants
       const funding_account_name =
         input.funding_account ||
         CATEGORY_FUNDING_MAP[category_name] ||
-        "checkings";
+        DEFAULT_FUNDING_ACCOUNT;
 
       if (!is_valid_funding_account(funding_account_name)) {
         return {
@@ -208,7 +220,7 @@ export async function add_transaction(
       }
 
       // Create expense page
-      const properties: any = {
+      const properties: Record<string, unknown> = {
         title: { title: [{ text: { content: title } }] },
         date: { date: { start: iso_date } },
         amount: { number: input.amount },
@@ -228,7 +240,8 @@ export async function add_transaction(
 
       response = await notion.pages.create({
         parent: { database_id: EXPENSES_DB_ID },
-        properties,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        properties: properties as any,
       });
     } else {
       // Check for duplicate income before creating
@@ -248,14 +261,14 @@ export async function add_transaction(
       }
 
       // Create income page - requires matching budget rule for this account
-      const budget_name = input.budget || "default";
+      const budget_name = input.budget || DEFAULT_BUDGET_NAME;
       const budget_pages = await find_budget_rule_pages_by_title(budget_name);
 
       // Find the budget rule that links to this account
       let budget_page_id: string | null = null;
       for (const page of budget_pages) {
-        const relation = page.properties?.account?.relation?.[0];
-        if (relation?.id === account_page_id) {
+        const relation = get_relation_prop(page.properties, "account");
+        if (relation[0]?.id === account_page_id) {
           budget_page_id = page.id;
           break;
         }
@@ -273,7 +286,7 @@ export async function add_transaction(
           ? input.pre_breakdown
           : input.amount;
 
-      const base_properties: any = {
+      const base_properties: Record<string, unknown> = {
         title: { title: [{ text: { content: title } }] },
         date: { date: { start: iso_date } },
         amount: { number: input.amount },
@@ -285,21 +298,29 @@ export async function add_transaction(
         }),
       };
 
-      // Try "categories" first, fall back to "category" (schema varies)
+      // Try "categories" first, fall back to "category" (schema varies between databases)
       const try_create = async (cat_prop: "category" | "categories") => {
         return await notion.pages.create({
           parent: { database_id: INCOME_DB_ID },
           properties: {
             ...base_properties,
             [cat_prop]: { relation: [{ id: category_page_id }] },
-          },
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          } as any,
         });
       };
 
       try {
         response = await try_create("categories");
-      } catch {
-        response = await try_create("category");
+      } catch (err: unknown) {
+        // Only retry with alternate property name for Notion validation errors
+        // (schema name varies between databases). Re-throw other errors
+        // (network failures, rate limits, etc.) instead of swallowing them.
+        if (is_notion_validation_error(err)) {
+          response = await try_create("category");
+        } else {
+          throw err;
+        }
       }
     }
 
@@ -308,11 +329,13 @@ export async function add_transaction(
       transaction_id: response.id,
       message: `added ${input.transaction_type} of $${input.amount} to ${account_name} (category: ${category_name}).`,
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : "unknown error while adding transaction.";
     console.error("error adding transaction to Notion:", err);
     return {
       success: false,
-      error: err?.message || "unknown error while adding transaction.",
+      error: message,
     };
   }
 }
@@ -359,11 +382,15 @@ export async function add_transactions_batch(
         message: tx_result.message,
         error: tx_result.error,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : "unknown error while processing batch item.";
       results.push({
         index,
         success: false,
-        error: err?.message ?? "unknown error while processing batch item.",
+        error: message,
       });
     }
   }
