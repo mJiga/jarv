@@ -155,8 +155,22 @@ export async function call_split_paycheck_tool(args: split_paycheck_args) {
   return call_mcp_tool("split_paycheck", args, "Paycheck split.");
 }
 
-export async function call_get_uncategorized_transactions_tool() {
-  return call_mcp_tool("get_uncategorized_transactions", {}, "Retrieved uncategorized transactions.");
+export async function call_get_uncategorized_transactions_tool(): Promise<mcp_tool_result> {
+  const result = await call_mcp_tool("get_uncategorized_transactions", {}, "Retrieved uncategorized transactions.");
+
+  // Extract structured content to include expense details in message
+  const mcp_result = result.raw?.result as Record<string, unknown> | undefined;
+  const structured = mcp_result?.structuredContent as { expenses?: Array<{ id: string; amount: number; note: string; date: string }> } | undefined;
+  const expenses = structured?.expenses;
+
+  if (expenses && expenses.length > 0) {
+    const expense_list = expenses
+      .map((e) => `- ID: ${e.id} | $${e.amount.toFixed(2)} | ${e.note || "(no note)"} | ${e.date}`)
+      .join("\n");
+    result.message = `Found ${expenses.length} uncategorized expense(s):\n${expense_list}`;
+  }
+
+  return result;
 }
 
 export async function call_get_categories_tool() {
