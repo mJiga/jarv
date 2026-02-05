@@ -5,71 +5,71 @@ A Model Context Protocol (MCP) server for personal finance tracking, backed by N
 > **Important:** This project is tightly coupled to a specific Notion workspace:  
 > **[Jarvis Notion Site](https://memoo0.notion.site/jarv-template-2e54abe19ef5802fb3fcce0017006fc1)**
 >
-> The database schemas, relations, and formulas are configured within Notion itself. To use this project, in order to procede, duplicate the notion template
+> The database schemas, relations, and formulas are configured within Notion itself. To use this project, duplicate the Notion template to proceed.
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                           USER INPUT                                │
-│              "spent $12 on groceries at Trader Joes"                │
-└─────────────────────────────────────────────────────────────────────┘
-                                   │
-                                   ▼
-┌────────────────────────────────────────────────────────────────────┐
-│                      AGENT SERVER (port 4000)                      │
-│                         POST /chat                                 │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │  Gemini Client (gemini_client.ts) or LLM Provider           │   │
-│  │  - Parses natural language → structured action              │   │
-│  │  - Infers: action type, amount, category, account, etc.     │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-│                              │                                     │
-│                              ▼                                     │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │  MCP Client (mcp_client.ts)                                 │   │
-│  │  - Calls MCP tools via JSON-RPC                             │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-└────────────────────────────────────────────────────────────────────┘
-                                   │
-                                   ▼
-┌─────────────────────────────────────────────────────────────────────   ┐
-│                       MCP SERVER (port 3000)                            │
-│                         POST /mcp                                       │
-│  ┌─────────────────────────────────────────────────────────────┐    │
-│  │  Registered Tools (server.ts)                                    │   │
-│  │  - add_transaction         - get_categories                      │   │
-│  │  - add_transactions_batch  - get_uncategorized_transactions      │   │
-│  │  - set_budget_rule         - update_transaction_category         │   │
-│  │  - split_paycheck          - update_transaction_categories_batch │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-│                              │                                      │
-│                              ▼                                      │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │  Services Layer                                             │   │
-│  │  - transactions.ts  (add_transaction, batch)                │   │
-│  │  - payments.ts      (create_payment, auto-clear expenses)   │   │
-│  │  - categories.ts    (get/update uncategorized)              │   │
-│  │  - budgets.ts       (set_budget_rule, split_paycheck)       │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-│                              │                                      │
-│                              ▼                                      │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │  Notion Layer (notion/client.ts, notion/utils.ts)           │   │
-│  │  - API client + DB IDs                                      │   │
-│  │  - Category caching + validation                            │   │
-│  │  - Account/budget rule lookups                              │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────┘
-                                   │
-                                   ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                         NOTION DATABASES                            │
-│  - Expenses DB       - Income DB        - Payments DB              │
-│  - Accounts DB       - Categories DB    - Budget Rules DB          │
-└─────────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────┐
+│                           USER INPUT                              │
+│              "spent $12 on groceries at Trader Joes"              │
+└───────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+┌───────────────────────────────────────────────────────────────────┐
+│                      AGENT SERVER (port 4000)                     │
+│                         POST /chat                                │
+│  ┌─────────────────────────────────────────────────────────────┐  │
+│  │  Gemini Client (gemini_client.ts) or LLM Provider           │  │
+│  │  - Parses natural language → structured action              │  │
+│  │  - Infers: action type, amount, category, account, etc.     │  │
+│  └─────────────────────────────────────────────────────────────┘  │
+│                              │                                    │
+│                              ▼                                    │
+│  ┌─────────────────────────────────────────────────────────────┐  │
+│  │  MCP Client (mcp_client.ts)                                 │  │
+│  │  - Calls MCP tools via JSON-RPC                             │  │
+│  └─────────────────────────────────────────────────────────────┘  │
+└───────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+┌───────────────────────────────────────────────────────────────────┐
+│                       MCP SERVER (port 3000)                      │
+│                         POST /mcp                                 │
+│  ┌─────────────────────────────────────────────────────────────┐  │
+│  │  Registered Tools (server.ts)                               │  │
+│  │  - add_transaction         - get_categories                 │  │
+│  │  - add_transactions_batch  - get_uncategorized_transactions │  │
+│  │  - set_budget_rule         - update_transaction_category    │  │
+│  │  - split_paycheck     - update_transaction_categories_batch │  │
+│  └─────────────────────────────────────────────────────────────┘  │
+│                              │                                    │
+│                              ▼                                    │
+│  ┌─────────────────────────────────────────────────────────────┐  │
+│  │  Services Layer                                             │  │
+│  │  - transactions.ts  (add_transaction, batch)                │  │
+│  │  - payments.ts      (create_payment, auto-clear expenses)   │  │
+│  │  - categories.ts    (get/update uncategorized)              │  │
+│  │  - budgets.ts       (set_budget_rule, split_paycheck)       │  │
+│  └─────────────────────────────────────────────────────────────┘  │
+│                              │                                    │
+│                              ▼                                    │
+│  ┌─────────────────────────────────────────────────────────────┐  │
+│  │  Notion Layer (notion/client.ts, notion/utils.ts)           │  │
+│  │  - API client + DB IDs                                      │  │
+│  │  - Category caching + validation                            │  │
+│  │  - Account/budget rule lookups                              │  │
+│  └─────────────────────────────────────────────────────────────┘  │
+└───────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+┌───────────────────────────────────────────────────────────────────┐
+│                         NOTION DATABASES                          │
+│  - Expenses DB       - Income DB        - Payments DB            │
+│  - Accounts DB       - Categories DB    - Budget Rules DB        │
+└───────────────────────────────────────────────────────────────────┘
 ```
 
 > **Note:** If using the MCP server through ChatGPT, Claude, or other LLM clients with native MCP support, the entire `src/agent/` directory is not necessary. Those clients call the MCP tools directly at `POST /mcp`. The agent is only needed if you want a standalone `/chat` endpoint with Gemini-based parsing.
@@ -86,6 +86,7 @@ jarvis/
 │   │   ├── constants.ts            # Shared account enums + validators
 │   │   ├── notion/
 │   │   │   ├── client.ts           # Notion API client + DB IDs
+│   │   │   ├── types.ts            # Typed wrappers for dataSources API
 │   │   │   └── utils.ts            # Helpers: category cache, lookups
 │   │   └── services/
 │   │       ├── transactions.ts     # add_transaction, batch
@@ -97,7 +98,8 @@ jarvis/
 │       ├── agent_server.ts         # Express /chat endpoint
 │       ├── mcp_client.ts           # JSON-RPC client for MCP
 │       └── llm/
-│           └── gemini_client.ts    # Gemini prompt + action parser
+│           ├── gemini_client.ts    # Gemini prompt + action parser
+│           └── claude_prompt.md    # Claude system prompt reference
 │
 ├── package.json
 ├── tsconfig.json
@@ -130,7 +132,7 @@ Create 6 databases in Notion with these schemas:
 
 ### 3. Environment Variables
 
-Copy `.env.example` to `.env` and fill in:
+Copy `env.example` to `.env` and fill in:
 
 ```bash
 # Notion
@@ -144,10 +146,6 @@ BUDGET_RULES_DB_ID=xxx
 
 # Gemini (for Agent)
 GEMINI_API_KEY=xxx
-
-# Optional: Credit card last-4 digits (for LLM card matching)
-SAPPHIRE_LAST4=xxxx
-FREEDOM_LAST4=xxxx
 
 # Optional: custom ports
 PORT=3000           # MCP server
@@ -286,7 +284,7 @@ Response:
 
 ```bash
 # Type check
-npx tsc --noEmit
+npm run typecheck
 
 # Run MCP server (hot reload)
 npm run mcp
