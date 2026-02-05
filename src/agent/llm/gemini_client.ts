@@ -10,7 +10,7 @@ import {
   CREDIT_CARD_ACCOUNTS,
   TRANSACTION_TYPES,
   CATEGORY_FUNDING_MAP,
-  KNOWN_BUDGET_NAMES,
+  BUDGET_NAMES,
   account_type,
   funding_account_type,
   credit_card_account_type,
@@ -117,8 +117,8 @@ function build_prompt(user_message: string): string {
     .map(([cat, fund]) => `${cat} -> ${fund}`)
     .join(", ");
 
-  // Build known budget names from constants
-  const budget_names_list = KNOWN_BUDGET_NAMES.join('", "');
+  // Build budget names from constants
+  const budget_names_list = BUDGET_NAMES.join('", "');
 
   return `
 You are a finance command parser for my personal expense tracker.

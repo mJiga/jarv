@@ -59,8 +59,8 @@ export const DEFAULT_FUNDING_ACCOUNT: funding_account_type = "checkings";
 
 export const DEFAULT_BUDGET_NAME = "default";
 
-/** Known budget rule names — referenced in LLM prompts and validation */
-export const KNOWN_BUDGET_NAMES = ["hunt", "msft", "default"] as const;
+/** Budget rule names — referenced in LLM prompts and validation */
+export const BUDGET_NAMES = ["hunt", "msft", "default"] as const;
 
 // -----------------------------------------------------------------------------
 // Categories
