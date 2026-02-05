@@ -103,10 +103,6 @@ function build_prompt(user_message: string): string {
   yesterday.setDate(yesterday.getDate() - 1);
   const yesterday_str = yesterday.toISOString().slice(0, 10);
 
-  const card_info = `CREDIT CARD LAST 4 DIGITS:
-- Sapphire: ${process.env.SAPPHIRE_LAST4}
-- Freedom Unlimited: ${process.env.FREEDOM_LAST4}`;
-
   // Build account lists from constants
   const accounts_list = ACCOUNTS.join(", ");
   const funding_accounts_list = FUNDING_ACCOUNTS.join(", ");
@@ -125,7 +121,6 @@ You are a finance command parser for my personal expense tracker.
 
 CURRENT DATE: ${today_str}
 YESTERDAY: ${yesterday_str}
-CC LAST 4 DIGITS: ${card_info}
 
 VALID ACCOUNTS: ${accounts_list}
 VALID FUNDING ACCOUNTS: ${funding_accounts_list}
@@ -133,10 +128,6 @@ VALID CREDIT CARDS: ${cc_accounts_list}
 
 CATEGORY FUNDING DEFAULTS: ${category_funding_entries}
 (These categories auto-assign funding_account if not specified. Other categories default to checkings.)
-
-CARD MATCHING RULES:
-- If the user message includes a 4-digit number matching CC LAST 4 above, use that card.
-- If both card name and last-4 appear and conflict, trust the last-4.
 
 Your ONLY job is to read the user's message and output STRICT JSON (no extra text).
 You can ONLY choose between these actions:
@@ -237,7 +228,7 @@ function extract_json(text: string): unknown {
  * Validates response matches expected schema before returning.
  */
 export async function infer_action(
-  user_message: string
+  user_message: string,
 ): Promise<parsed_action> {
   const prompt = build_prompt(user_message);
 
@@ -268,18 +259,25 @@ export async function infer_action(
           args: {
             amount: a.amount,
             transaction_type: a.transaction_type as transaction_type,
-            account: typeof a.account === "string" ? a.account as account_type : undefined,
+            account:
+              typeof a.account === "string"
+                ? (a.account as account_type)
+                : undefined,
             category: typeof a.category === "string" ? a.category : undefined,
             date: is_valid_date ? date_str : undefined,
             note: typeof a.note === "string" ? a.note : undefined,
             funding_account:
               typeof a.funding_account === "string"
-                ? a.funding_account as funding_account_type
+                ? (a.funding_account as funding_account_type)
                 : undefined,
             from_account:
-              typeof a.from_account === "string" ? a.from_account as funding_account_type : undefined,
+              typeof a.from_account === "string"
+                ? (a.from_account as funding_account_type)
+                : undefined,
             to_account:
-              typeof a.to_account === "string" ? a.to_account as credit_card_account_type : undefined,
+              typeof a.to_account === "string"
+                ? (a.to_account as credit_card_account_type)
+                : undefined,
           },
         };
       }
@@ -288,7 +286,9 @@ export async function infer_action(
     if (parsed.action === "add_transaction_batch" && parsed.args) {
       const a = parsed.args as Record<string, unknown>;
       if (Array.isArray(a.transactions) && a.transactions.length > 0) {
-        const validated_transactions = (a.transactions as Array<Record<string, unknown>>).map((t) => {
+        const validated_transactions = (
+          a.transactions as Array<Record<string, unknown>>
+        ).map((t) => {
           const t_date_str = typeof t.date === "string" ? t.date : "";
           const is_valid_date = /^\d{4}-\d{2}-\d{2}$/.test(t_date_str);
 
@@ -306,13 +306,17 @@ export async function infer_action(
             amount: t.amount as number,
             transaction_type: t.transaction_type as transaction_type,
           };
-          if (typeof t.account === "string") entry.account = t.account as account_type;
+          if (typeof t.account === "string")
+            entry.account = t.account as account_type;
           if (typeof t.category === "string") entry.category = t.category;
           if (is_valid_date) entry.date = t_date_str;
           if (typeof t.note === "string") entry.note = t.note;
-          if (typeof t.funding_account === "string") entry.funding_account = t.funding_account as funding_account_type;
-          if (typeof t.from_account === "string") entry.from_account = t.from_account as funding_account_type;
-          if (typeof t.to_account === "string") entry.to_account = t.to_account as credit_card_account_type;
+          if (typeof t.funding_account === "string")
+            entry.funding_account = t.funding_account as funding_account_type;
+          if (typeof t.from_account === "string")
+            entry.from_account = t.from_account as funding_account_type;
+          if (typeof t.to_account === "string")
+            entry.to_account = t.to_account as credit_card_account_type;
           return entry;
         });
 
@@ -334,7 +338,10 @@ export async function infer_action(
           action: "set_budget_rule",
           args: {
             budget_name: a.budget_name,
-            budgets: a.budgets as Array<{ account: string; percentage: number }>,
+            budgets: a.budgets as Array<{
+              account: string;
+              percentage: number;
+            }>,
           },
         };
       }
@@ -388,9 +395,11 @@ export async function infer_action(
     ) {
       const a = parsed.args as Record<string, unknown>;
       if (Array.isArray(a.updates) && a.updates.length > 0) {
-        const valid_updates = (a.updates as Array<Record<string, unknown>>).filter(
+        const valid_updates = (
+          a.updates as Array<Record<string, unknown>>
+        ).filter(
           (u) =>
-            typeof u.expense_id === "string" && typeof u.category === "string"
+            typeof u.expense_id === "string" && typeof u.category === "string",
         ) as Array<{ expense_id: string; category: string }>;
         if (valid_updates.length > 0) {
           return {
