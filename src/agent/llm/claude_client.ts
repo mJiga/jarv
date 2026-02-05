@@ -1,9 +1,9 @@
-// src/agent/llm/gemini_client.ts
-// Gemini LLM client for parsing natural language into structured actions.
-// Outputs JSON matching MCP tool schemas. LLM-agnostic design allows swapping providers.
+// src/agent/llm/claude_client.ts
+// Claude LLM client for parsing natural language into structured actions.
+// Drop-in replacement for gemini_client.ts with optimized prompt structure.
 
 import "dotenv/config";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import Anthropic from "@anthropic-ai/sdk";
 import {
   ACCOUNTS,
   FUNDING_ACCOUNTS,
@@ -16,15 +16,14 @@ import {
   transaction_type,
 } from "../../mcp/constants";
 
-if (!process.env.GEMINI_API_KEY) {
-  throw new Error("GEMINI_API_KEY is not set in .env");
+if (!process.env.ANTHROPIC_API_KEY) {
+  throw new Error("ANTHROPIC_API_KEY is not set in .env");
 }
 
-const gen_ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = gen_ai.getGenerativeModel({ model: "gemini-2.0-flash" });
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // -----------------------------------------------------------------------------
-// Action Types
+// Action Types (shared with gemini_client.ts)
 // -----------------------------------------------------------------------------
 
 export type parsed_action =
@@ -87,14 +86,83 @@ export type parsed_action =
   | { action: "unknown"; reason?: string };
 
 // -----------------------------------------------------------------------------
-// Prompt Construction
+// System Prompt
 // -----------------------------------------------------------------------------
 
-/**
- * Builds the system prompt for action inference.
- * Uses global constants for account lists to stay in sync with MCP server.
- */
-function build_prompt(user_message: string): string {
+function build_system_prompt(): string {
+  const accounts_list = ACCOUNTS.join(", ");
+  const funding_accounts_list = FUNDING_ACCOUNTS.join(", ");
+  const cc_accounts_list = CREDIT_CARD_ACCOUNTS.join(", ");
+  const auto_funding = Object.entries(CATEGORY_FUNDING_MAP)
+    .map(([cat, fund]) => `${cat}->${fund}`)
+    .join(", ");
+
+  return `You are Jarv, a personal finance command parser. Convert natural language to structured JSON actions.
+
+# ACCOUNTS
+all: [${accounts_list}]
+funding: [${funding_accounts_list}]
+credit_cards: [${cc_accounts_list}]
+auto_funding: {${auto_funding}} (others->checkings)
+
+# CARDS
+sapphire(${process.env.SAPPHIRE_LAST4 || "????"}), freedom(${process.env.FREEDOM_LAST4 || "????"})
+
+# OUTPUT FORMAT
+Respond with ONLY a single JSON object. No markdown, no explanation, no code fences.
+
+# ACTIONS
+
+## add_transaction
+Single expense/income/payment.
+{"action":"add_transaction","args":{"amount":number,"transaction_type":"expense"|"income"|"payment","account?":string,"category?":string,"date?":"YYYY-MM-DD","note?":string,"funding_account?":string,"from_account?":string,"to_account?":string}}
+
+Rules:
+- expense: spending (default). Use account=card, funding_account=source
+- income: money received (not paychecks with employer name)
+- payment: CC bill payment. Use from_account=source, to_account=card
+
+## add_transaction_batch
+Multiple transactions: {"action":"add_transaction_batch","args":{"transactions":[...]}}
+
+## split_paycheck
+ONLY for paychecks WITH employer name (hunt, msft) or "got paid":
+{"action":"split_paycheck","args":{"gross_amount":number,"budget_name":"hunt"|"msft"|"default","date?":"YYYY-MM-DD"}}
+- "hunt 2500" -> budget_name="hunt"
+- "got paid 2000" -> budget_name="default"
+
+## set_budget_rule
+{"action":"set_budget_rule","args":{"budget_name":string,"budgets":[{"account":string,"percentage":number}]}}
+
+## get_uncategorized_transactions / get_categories
+{"action":"<name>","args":{}}
+
+## update_transaction_category
+{"action":"update_transaction_category","args":{"expense_id":string,"category":string}}
+
+## update_transaction_categories_batch
+{"action":"update_transaction_categories_batch","args":{"updates":[{"expense_id":string,"category":string}]}}
+
+# CATEGORY INFERENCE
+lunch/dinner/restaurant->"out", groceries/costco/trader joes->"groceries", uber/lyft->"lyft", amazon->"shopping", paid <person>/zelle/venmo->"zelle"(account=checkings), gas/shell->"gas", netflix/spotify->"subscriptions"
+
+# CARD MATCHING (priority order)
+1. 4-digit match -> that card
+2. Name mention -> that card
+3. Conflict -> trust 4-digit
+4. Default -> sapphire
+
+# RULES
+- OMIT date if not specified
+- OMIT optional fields if not inferable
+- note = merchant/description from message`;
+}
+
+// -----------------------------------------------------------------------------
+// User Message Construction
+// -----------------------------------------------------------------------------
+
+function build_user_message(user_input: string): string {
   const today = new Date();
   const today_str = today.toISOString().slice(0, 10);
 
@@ -102,115 +170,20 @@ function build_prompt(user_message: string): string {
   yesterday.setDate(yesterday.getDate() - 1);
   const yesterday_str = yesterday.toISOString().slice(0, 10);
 
-  // Build account lists from constants
-  const accounts_list = ACCOUNTS.join(", ");
-  const funding_accounts_list = FUNDING_ACCOUNTS.join(", ");
-  const cc_accounts_list = CREDIT_CARD_ACCOUNTS.join(", ");
+  return `today=${today_str} yesterday=${yesterday_str}
 
-  // Build category-to-funding mapping for prompt
-  const category_funding_entries = Object.entries(CATEGORY_FUNDING_MAP)
-    .map(([cat, fund]) => `"${cat}"->"${fund}"`)
-    .join(", ");
-
-  return `# ROLE
-Finance command parser. Convert natural language to structured JSON for expense tracking.
-
-# CONTEXT
-today=${today_str} | yesterday=${yesterday_str}
-cards: sapphire(${process.env.SAPPHIRE_LAST4 || "????"}), freedom(${process.env.FREEDOM_LAST4 || "????"})
-accounts: [${accounts_list}]
-funding_accounts: [${funding_accounts_list}]
-credit_cards: [${cc_accounts_list}]
-auto_funding: {${category_funding_entries}} (others->checkings)
-
-# OUTPUT
-Respond with ONLY valid JSON. No markdown, no explanation, no code fences.
-
-# ACTIONS (choose exactly one)
-
-## 1. add_transaction
-Single expense/income/payment.
-\`{"action":"add_transaction","args":{...}}\`
-
-Required: amount(number), transaction_type("expense"|"income"|"payment")
-Optional: account, category, date(YYYY-MM-DD), note, funding_account, from_account, to_account
-
-Transaction type rules:
-- DEFAULT to "expense" for spending/purchases
-- "income" only for money received (not paychecks with employer names)
-- "payment" only for credit card payments (must mention card name or "credit card payment")
-
-For payments: use from_account (source) + to_account (credit card)
-For CC expenses: use account (the card) + funding_account (which bucket pays)
-
-## 2. add_transaction_batch
-Multiple transactions at once.
-\`{"action":"add_transaction_batch","args":{"transactions":[...]}}\`
-
-## 3. split_paycheck
-ONLY when employer/income source name mentioned: hunt, msft, or generic paycheck.
-\`{"action":"split_paycheck","args":{"gross_amount":number,"budget_name":"hunt"|"msft"|"default","date?":"YYYY-MM-DD","description?":string}}\`
-
-Triggers: "<employer> paid <amount>", "<employer> <amount>", "got paid <amount>"
-- "hunt 2500" -> budget_name="hunt"
-- "msft paid 3000" -> budget_name="msft"
-- "got paid 2000" (no employer) -> budget_name="default"
-
-## 4. set_budget_rule
-Create/update budget allocation percentages.
-\`{"action":"set_budget_rule","args":{"budget_name":string,"budgets":[{"account":string,"percentage":number}]}}\`
-
-## 5. get_uncategorized_transactions
-User wants to review inbox/uncategorized/"other" items.
-\`{"action":"get_uncategorized_transactions","args":{}}\`
-
-## 6. get_categories
-User asks what categories exist.
-\`{"action":"get_categories","args":{}}\`
-
-## 7. update_transaction_category
-Change category of one transaction by ID.
-\`{"action":"update_transaction_category","args":{"expense_id":string,"category":string}}\`
-
-## 8. update_transaction_categories_batch
-Batch categorize multiple transactions.
-\`{"action":"update_transaction_categories_batch","args":{"updates":[{"expense_id":string,"category":string}]}}\`
-
-# CATEGORY INFERENCE (for expenses)
-lunch|dinner|restaurant|eating out -> "out"
-groceries|costco|trader joes|safeway|walmart -> "groceries"
-uber|lyft|taxi -> "lyft"
-amazon|online shopping -> "shopping"
-paid <person>|venmo|zelle -> "zelle" (use account="checkings")
-gas|shell|chevron -> "gas"
-netflix|spotify|subscription -> "subscriptions"
-If unclear, omit category (will default to "other")
-
-# CARD MATCHING
-1. 4-digit number matching card last-4 -> use that card
-2. Card name (sapphire, freedom) -> use that card
-3. If conflict between name and last-4 -> trust last-4
-4. No card mentioned -> default to sapphire for expenses
-
-# FIELD RULES
-- OMIT date if not specified (don't guess)
-- OMIT optional fields if not inferable
-- note: capture merchant/description from user message
-- amount: extract number, handle "$" prefix
-
-# INPUT
-${user_message}`;
+INPUT: ${user_input}`;
 }
 
 // -----------------------------------------------------------------------------
 // JSON Extraction
 // -----------------------------------------------------------------------------
 
-/** Extracts JSON from model response, handling code fences */
 function extract_json(text: string): any {
   const trimmed = text.trim();
+  // Handle potential code fences
   const code_fence_match = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const json_text = code_fence_match ? code_fence_match[1] : trimmed;
+  const json_text = code_fence_match ? code_fence_match[1].trim() : trimmed;
 
   if (!json_text) {
     throw new Error("Invalid JSON: input is undefined");
@@ -222,25 +195,27 @@ function extract_json(text: string): any {
 // Action Inference
 // -----------------------------------------------------------------------------
 
-/**
- * Sends user message to Gemini, parses response into structured action.
- * Validates response matches expected schema before returning.
- */
 export async function infer_action(
   user_message: string
 ): Promise<parsed_action> {
-  const prompt = build_prompt(user_message);
+  const system_prompt = build_system_prompt();
+  const user_content = build_user_message(user_message);
 
-  const result = await model.generateContent({
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 1024,
+    system: system_prompt,
+    messages: [{ role: "user", content: user_content }],
   });
 
-  const text = result.response.text();
-  console.log("[Gemini] Raw response:", text);
+  const text_block = response.content.find((block) => block.type === "text");
+  const text = text_block && "text" in text_block ? text_block.text : "";
+
+  console.log("[Claude] Raw response:", text);
 
   try {
     const parsed = extract_json(text);
-    console.log("[Gemini] Parsed JSON:", JSON.stringify(parsed, null, 2));
+    console.log("[Claude] Parsed JSON:", JSON.stringify(parsed, null, 2));
 
     // Validate and return typed action
     if (parsed.action === "add_transaction" && parsed.args) {
@@ -386,7 +361,7 @@ export async function infer_action(
       reason: "Parsed JSON did not match expected schema.",
     };
   } catch (err: any) {
-    console.error("[Gemini] Failed to parse JSON:", err);
+    console.error("[Claude] Failed to parse JSON:", err);
     return {
       action: "unknown",
       reason: "Failed to parse model output as JSON.",
