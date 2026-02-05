@@ -118,7 +118,6 @@ Finance command parser. Convert natural language to structured JSON for expense 
 
 # CONTEXT
 today=${today_str} | yesterday=${yesterday_str}
-cards: sapphire(${process.env.SAPPHIRE_LAST4 || "????"}), freedom(${process.env.FREEDOM_LAST4 || "????"})
 accounts: [${accounts_list}]
 funding_accounts: [${funding_accounts_list}]
 credit_cards: [${cc_accounts_list}]
@@ -188,10 +187,8 @@ netflix|spotify|subscription -> "subscriptions"
 If unclear, omit category (will default to "other")
 
 # CARD MATCHING
-1. 4-digit number matching card last-4 -> use that card
-2. Card name (sapphire, freedom) -> use that card
-3. If conflict between name and last-4 -> trust last-4
-4. No card mentioned -> default to sapphire for expenses
+1. Card name (sapphire, freedom) -> use that card
+2. No card mentioned -> default to sapphire for expenses
 
 # FIELD RULES
 - OMIT date if not specified (don't guess)
