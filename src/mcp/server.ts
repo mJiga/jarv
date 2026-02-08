@@ -249,11 +249,18 @@ server.registerTool(
       };
     }
 
+    const expenses = result.expenses ?? [];
+    let text = `Found ${expenses.length} uncategorized expense(s).`;
+    if (expenses.length > 0) {
+      const lines = expenses.map(
+        (e) => `- ${e.id} | $${e.amount} | ${e.date || "no date"} | ${e.note || "no note"}`
+      );
+      text += "\n" + lines.join("\n");
+    }
+
     return {
-      structuredContent: { expenses: result.expenses ?? [] },
-      content: [
-        { type: "text", text: `Found ${(result.expenses ?? []).length} uncategorized expense(s).` },
-      ],
+      structuredContent: { expenses },
+      content: [{ type: "text", text }],
       _meta: {},
     };
   }
