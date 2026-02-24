@@ -121,14 +121,14 @@ jarvis/
 
 Create 6 databases in Notion with these schemas:
 
-| Database         | Required Properties                                                                                                                                                                                                                                      |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Expenses**     | `title`, `amount` (number), `date` (date), `accounts` (relation→Accounts), `categories` (relation→Categories), `funding_account` (relation→Accounts), `cleared` (checkbox), `cleared_by` (relation→Payments), `paid_amount` (number), `note` (rich_text) |
-| **Income**       | `title`, `amount` (number), `date` (date), `accounts` (relation→Accounts), `categories` (relation→Categories), `pre_breakdown` (number), `budget` (relation→Budget Rules), `note` (rich_text)                                                            |
-| **Payments**     | `title`, `amount` (number), `date` (date), `from_account` (relation→Accounts), `to_account` (relation→Accounts), `cleared_expenses` (relation→Expenses), `note` (rich_text)                                                                              |
-| **Accounts**     | `title` (account name: checkings, bills, sapphire, etc.)                                                                                                                                                                                                 |
-| **Categories**   | `title` (category name: groceries, out, lyft, etc.)                                                                                                                                                                                                      |
-| **Budget Rules** | `title` (rule name), `account` (relation→Accounts), `percentage` (number 0-1)                                                                                                                                                                            |
+| Database         | Required Properties                                                                                                                                                                                                                                                                                         |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Expenses**     | `title`, `amount` (number), `date` (date), `accounts` (relation→Accounts), `categories` (relation→Categories), `funding_account` (relation→Accounts), `cleared` (checkbox), `cleared_by` (relation→Payments), `paid_amount` (number), `note` (rich_text)                                                    |
+| **Income**       | `title`, `amount` (number), `date` (date), `accounts` (relation→Accounts), `categories` (relation→Categories), `pre_breakdown` (number), `budget` (relation→Budget Rules), `note` (rich_text)                                                                                                               |
+| **Payments**     | `title`, `amount` (number), `date` (date), `from_account` (relation→Accounts), `to_account` (relation→Accounts), `cleared_expenses` (relation→Expenses), `note` (rich_text)                                                                                                                                 |
+| **Accounts**     | `title`, `account_type` (select: credit/checkings/savings/investment), `starting_balance` (number), `ledger_balance` (formula), `reserved_for_cc` (rollup), `available_to_spend` (formula), `total_income` (rollup), `total_expenses` (rollup), `total_payments_in` (rollup), `total_payments_out` (rollup) |
+| **Categories**   | `title` (category name: groceries, out, lyft, etc.)                                                                                                                                                                                                                                                         |
+| **Budget Rules** | `title` (rule name), `account` (relation→Accounts), `percentage` (number 0-1)                                                                                                                                                                                                                               |
 
 ### 3. Environment Variables
 
@@ -257,10 +257,43 @@ Response:
 
 ---
 
+## Balance Model
+
+Account balances are computed with **account-level math** via Notion formulas, not by summing individual expense statuses.
+
+### `ledger_balance` formula
+
+```
+if(account_type == "credit",
+  total_expenses - total_payments_in,
+  starting_balance + total_income - total_payments_out - total_expenses
+)
+```
+
+- **Credit cards**: Outstanding = charges minus payments received. A payment immediately reduces the balance by its full amount, regardless of whether individual expenses are cleared.
+- **Debit/savings accounts**: Balance = starting balance + income - payments out - direct expenses.
+
+### `reserved_for_cc` (rollup)
+
+Sums `owed_amount` from credit card expenses where `funding_account` = this account. Shows funding accounts (e.g., checkings) how much is earmarked for unpaid credit card expenses.
+
+### `available_to_spend` (formula)
+
+```
+ledger_balance - reserved_for_cc
+```
+
+### Expense clearing (reconciliation)
+
+When a payment is created via the API, `payments.ts` auto-clears matching expenses (oldest first). This sets `paid_amount` on each expense, which reduces `owed_amount` (formula: `amount - paid_amount`), which in turn reduces `reserved_for_cc` on the funding account. Clearing is **required for funding account accuracy** but does **not** affect the credit card's `ledger_balance`.
+
+---
+
 ## Key Features
 
 - **Unified `add_transaction`**: Handles expenses, income, and payments in one tool
-- **Auto-clear payments**: When adding a payment, automatically marks matching uncleared expenses as cleared
+- **Account-level balances**: Credit card outstanding computed from total expenses minus total payments, not from individual expense clearing
+- **Auto-clear payments**: When adding a payment, automatically marks matching uncleared expenses as cleared (updates funding account reserves)
 - **Category validation**: Unknown categories are coerced to "other"
 - **Category caching**: Fetched from Notion with 5-minute TTL
 - **LLM-agnostic design**: Agent layer can swap Gemini for any LLM
