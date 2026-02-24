@@ -22,6 +22,9 @@ import {
   get_number_prop,
   get_rich_text_prop,
   get_formula_number_prop,
+  get_date_prop,
+  get_relation_prop,
+  notion_page,
 } from "../notion/types";
 
 // -----------------------------------------------------------------------------
@@ -35,6 +38,22 @@ export interface create_payment_input {
   date?: string | undefined; // ISO date. Default: today
   note?: string | undefined;
   category?: string | undefined;
+  expense_ids?: string[] | undefined; // Target specific expenses instead of FIFO auto-clearing
+}
+
+export interface uncleared_expense_info {
+  expense_id: string;
+  amount: number;
+  owed_amount: number;
+  date: string;
+  note: string;
+}
+
+export interface get_uncleared_expenses_result {
+  success: boolean;
+  expenses: uncleared_expense_info[];
+  total_owed: number;
+  error?: string | undefined;
 }
 
 export interface cleared_expense_info {
@@ -54,17 +73,121 @@ export interface create_payment_result {
 }
 
 // -----------------------------------------------------------------------------
+// Query: Uncleared Expenses
+// -----------------------------------------------------------------------------
+
+/**
+ * Returns uncleared expenses on a credit card, optionally filtered by funding account.
+ * Used to discover which expenses can be targeted for payment clearing.
+ */
+export async function get_uncleared_expenses(
+  account: string,
+  from_account?: string
+): Promise<get_uncleared_expenses_result> {
+  try {
+    if (!is_valid_credit_card_account(account)) {
+      return {
+        success: false,
+        expenses: [],
+        total_owed: 0,
+        error: `account must be one of: ${CREDIT_CARD_ACCOUNTS.join(", ")}`,
+      };
+    }
+
+    const account_page_id = await find_account_page_by_title(account);
+    if (!account_page_id) {
+      return {
+        success: false,
+        expenses: [],
+        total_owed: 0,
+        error: `account '${account}' not found in Notion Accounts DB.`,
+      };
+    }
+
+    // Build filter: uncleared expenses on this CC
+    const filter_conditions: Record<string, unknown>[] = [
+      { property: "accounts", relation: { contains: account_page_id } },
+      { property: "cleared", checkbox: { equals: false } },
+    ];
+
+    // Optionally filter by funding account
+    if (from_account) {
+      if (!is_valid_funding_account(from_account)) {
+        return {
+          success: false,
+          expenses: [],
+          total_owed: 0,
+          error: `from_account must be one of: ${FUNDING_ACCOUNTS.join(", ")}`,
+        };
+      }
+      const from_page_id = await find_account_page_by_title(from_account);
+      if (!from_page_id) {
+        return {
+          success: false,
+          expenses: [],
+          total_owed: 0,
+          error: `from_account '${from_account}' not found in Notion Accounts DB.`,
+        };
+      }
+      filter_conditions.push({
+        property: "funding_account",
+        relation: { contains: from_page_id },
+      });
+    }
+
+    const results = await query_data_source_with_filter(
+      EXPENSES_DB_ID,
+      { and: filter_conditions },
+      [
+        { property: "date", direction: "ascending" },
+        { timestamp: "created_time", direction: "ascending" },
+      ]
+    );
+
+    let total_owed = 0;
+    const expenses: uncleared_expense_info[] = results.map((page) => {
+      const props = page.properties;
+      const amount = get_number_prop(props, "amount") || 0;
+      const existing_paid = get_number_prop(props, "paid_amount") || 0;
+      const owed_formula = get_formula_number_prop(props, "owed_amount");
+      const owed =
+        typeof owed_formula === "number" ? owed_formula : amount - existing_paid;
+
+      total_owed += owed;
+
+      return {
+        expense_id: page.id,
+        amount,
+        owed_amount: owed,
+        date: get_date_prop(props, "date"),
+        note: get_rich_text_prop(props, "note"),
+      };
+    });
+
+    return { success: true, expenses, total_owed };
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : "unknown error fetching uncleared expenses.";
+    console.error("[payments] Error in get_uncleared_expenses:", err);
+    return { success: false, expenses: [], total_owed: 0, error: message };
+  }
+}
+
+// -----------------------------------------------------------------------------
 // Core Logic
 // -----------------------------------------------------------------------------
 
 /**
- * Creates a payment and auto-clears matching expenses.
+ * Creates a payment and clears matching expenses.
+ *
+ * When expense_ids is provided, only those specific expenses are cleared (targeted mode).
+ * When expense_ids is omitted, auto-clears using FIFO (oldest first).
  *
  * Flow:
  * 1. Validate accounts
  * 2. Create payment page in Payments DB
- * 3. Query uncleared expenses on the credit card funded by the source account
- * 4. Walk through oldest expenses first, applying payment until exhausted
+ * 3. Fetch targeted expenses by ID, or query uncleared FIFO
+ * 4. Apply payment amount across expenses
  * 5. Mark expenses as cleared and link to payment
  * 6. Handle partial payments (updates paid_amount but doesn't mark cleared)
  */
@@ -191,25 +314,42 @@ export async function create_payment(
 
     const payment_id = payment_response.id;
 
-    // Step 2: Find uncleared expenses matching this payment's accounts
-    // Expenses must: be on the credit card, funded by the source account, not cleared
-    const expenses_results = await query_data_source_with_filter(
-      EXPENSES_DB_ID,
-      {
-        and: [
-          { property: "accounts", relation: { contains: to_account_page_id } },
-          {
-            property: "funding_account",
-            relation: { contains: from_account_page_id },
-          },
-          { property: "cleared", checkbox: { equals: false } },
-        ],
-      },
-      [
-        { property: "date", direction: "ascending" },
-        { timestamp: "created_time", direction: "ascending" },
-      ]
-    );
+    // Step 2: Get expenses to clear
+    let expenses_results: notion_page[];
+
+    if (input.expense_ids && input.expense_ids.length > 0) {
+      // Targeted mode: fetch specific expenses by ID
+      const pages = await Promise.all(
+        input.expense_ids.map(async (id) => {
+          try {
+            const page = await notion.pages.retrieve({ page_id: id });
+            return page as unknown as notion_page;
+          } catch {
+            return null;
+          }
+        })
+      );
+      expenses_results = pages.filter((p): p is notion_page => p !== null);
+    } else {
+      // Auto-clear mode: FIFO query for uncleared expenses
+      expenses_results = await query_data_source_with_filter(
+        EXPENSES_DB_ID,
+        {
+          and: [
+            { property: "accounts", relation: { contains: to_account_page_id } },
+            {
+              property: "funding_account",
+              relation: { contains: from_account_page_id },
+            },
+            { property: "cleared", checkbox: { equals: false } },
+          ],
+        },
+        [
+          { property: "date", direction: "ascending" },
+          { timestamp: "created_time", direction: "ascending" },
+        ]
+      );
+    }
 
     // Step 3: Apply payment to expenses (oldest first)
     let remaining = input.amount;

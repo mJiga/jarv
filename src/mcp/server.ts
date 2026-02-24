@@ -25,6 +25,7 @@ import {
   update_transaction_categories_batch,
 } from "./services/categories";
 import { check_balance } from "./services/balances";
+import { get_uncleared_expenses } from "./services/payments";
 import { get_available_categories } from "./notion/utils";
 
 const server = new McpServer({
@@ -53,6 +54,7 @@ const add_transaction_schema = z.object({
   to_account: cc_account_enum.optional(),
   pre_breakdown: z.number().optional(),
   budget: z.string().optional(),
+  expense_ids: z.array(z.string()).optional(),
 });
 
 const add_transactions_batch_schema = z.object({
@@ -332,6 +334,54 @@ server.registerTool(
       content: [
         { type: "text", text: `Applied ${result.success_count}/${result.results.length} category update(s).` },
       ],
+      _meta: {},
+    };
+  }
+);
+
+// -----------------------------------------------------------------------------
+// Tools: Uncleared Expenses
+// -----------------------------------------------------------------------------
+
+const get_uncleared_expenses_schema = z.object({
+  account: cc_account_enum,
+  from_account: funding_account_enum.optional(),
+});
+
+server.registerTool(
+  "get_uncleared_expenses",
+  {
+    title: "get uncleared expenses",
+    description:
+      "Returns uncleared (unpaid) expenses on a credit card. Use to see what's outstanding before making a targeted payment.",
+    inputSchema: get_uncleared_expenses_schema,
+  },
+  async (args: Record<string, unknown>) => {
+    console.log("[MCP] get_uncleared_expenses", new Date().toISOString(), JSON.stringify(args));
+
+    const parsed = get_uncleared_expenses_schema.parse(args);
+    const result = await get_uncleared_expenses(parsed.account, parsed.from_account);
+
+    if (!result.success) {
+      return {
+        content: [{ type: "text", text: `Failed: ${result.error}` }],
+        isError: true,
+      };
+    }
+
+    const expenses = result.expenses;
+    let text = `Found ${expenses.length} uncleared expense(s) totaling $${result.total_owed} owed.`;
+    if (expenses.length > 0) {
+      const lines = expenses.map(
+        (e) =>
+          `- ${e.expense_id} | $${e.amount} (owed: $${e.owed_amount}) | ${e.date || "no date"} | ${e.note || "no note"}`
+      );
+      text += "\n" + lines.join("\n");
+    }
+
+    return {
+      structuredContent: { expenses, total_owed: result.total_owed },
+      content: [{ type: "text", text }],
       _meta: {},
     };
   }

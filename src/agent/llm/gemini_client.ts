@@ -41,6 +41,7 @@ export type parsed_action =
         funding_account?: funding_account_type | undefined;
         from_account?: funding_account_type | undefined;
         to_account?: credit_card_account_type | undefined;
+        expense_ids?: string[] | undefined;
       };
     }
   | {
@@ -86,6 +87,13 @@ export type parsed_action =
       args: { updates: Array<{ expense_id: string; category: string }> };
     }
   | { action: "check_balance"; args: { account: account_type } }
+  | {
+      action: "get_uncleared_expenses";
+      args: {
+        account: credit_card_account_type;
+        from_account?: funding_account_type | undefined;
+      };
+    }
   | { action: "unknown"; reason?: string | undefined };
 
 // -----------------------------------------------------------------------------
@@ -134,7 +142,7 @@ Single expense/income/payment.
 \`{"action":"add_transaction","args":{...}}\`
 
 Required: amount(number), transaction_type("expense"|"income"|"payment")
-Optional: account, category, date(YYYY-MM-DD), note, funding_account, from_account, to_account
+Optional: account, category, date(YYYY-MM-DD), note, funding_account, from_account, to_account, expense_ids(array of expense ID strings, for targeted payment clearing)
 
 Transaction type rules:
 - DEFAULT to "expense" for spending/purchases
@@ -180,6 +188,12 @@ Batch categorize multiple transactions.
 ## 9. check_balance
 Check the current ledger balance of an account.
 \`{"action":"check_balance","args":{"account":"sapphire"|"checkings"|...}}\`
+
+## 10. get_uncleared_expenses
+List unpaid expenses on a credit card. Use when user asks what they owe or wants to pay off a specific expense.
+\`{"action":"get_uncleared_expenses","args":{"account":"sapphire"|"freedom unlimited","from_account?":"checkings"|"bills"|...}}\`
+
+For targeted payment clearing: first call get_uncleared_expenses, identify the expense, then add_transaction with expense_ids.
 
 # CATEGORY INFERENCE (for expenses)
 lunch|dinner|restaurant|eating out -> "out"
@@ -372,6 +386,11 @@ export async function infer_action(
               typeof a.to_account === "string"
                 ? (a.to_account as credit_card_account_type)
                 : undefined,
+            expense_ids:
+              Array.isArray(a.expense_ids) &&
+              a.expense_ids.every((id: unknown) => typeof id === "string")
+                ? (a.expense_ids as string[])
+                : undefined,
           },
         };
       }
@@ -489,6 +508,25 @@ export async function infer_action(
         return {
           action: "check_balance",
           args: { account: a.account as account_type },
+        };
+      }
+    }
+
+    if (parsed.action === "get_uncleared_expenses" && parsed.args) {
+      const a = parsed.args as Record<string, unknown>;
+      if (
+        typeof a.account === "string" &&
+        CREDIT_CARD_ACCOUNTS.includes(a.account as credit_card_account_type)
+      ) {
+        return {
+          action: "get_uncleared_expenses",
+          args: {
+            account: a.account as credit_card_account_type,
+            from_account:
+              typeof a.from_account === "string"
+                ? (a.from_account as funding_account_type)
+                : undefined,
+          },
         };
       }
     }

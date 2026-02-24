@@ -48,6 +48,7 @@ export interface add_transaction_input extends Partial<income_db_fields> {
   funding_account?: string | undefined; // Which account funds credit card expenses
   from_account?: string | undefined; // Payment source (for payments)
   to_account?: string | undefined; // Payment destination (for payments)
+  expense_ids?: string[] | undefined; // Target specific expenses for payment clearing
 }
 
 export interface add_transaction_result {
@@ -118,6 +119,7 @@ export async function add_transaction(
         date: input.date,
         note: input.note,
         category: input.category,
+        expense_ids: input.expense_ids,
       });
 
       return {
