@@ -56,6 +56,10 @@ export interface update_transaction_categories_batch_args {
   updates: Array<{ expense_id: string; category: string }>;
 }
 
+export interface check_balance_args {
+  account: account_type;
+}
+
 // -----------------------------------------------------------------------------
 // Core Client
 // -----------------------------------------------------------------------------
@@ -185,4 +189,8 @@ export async function call_update_transaction_categories_batch_tool(
   args: update_transaction_categories_batch_args
 ) {
   return call_mcp_tool("update_transaction_categories_batch", args, "Batch category updates applied.");
+}
+
+export async function call_check_balance_tool(args: check_balance_args) {
+  return call_mcp_tool("check_balance", args, "Balance retrieved.");
 }

@@ -24,6 +24,7 @@ import {
   update_transaction_category,
   update_transaction_categories_batch,
 } from "./services/categories";
+import { check_balance } from "./services/balances";
 import { get_available_categories } from "./notion/utils";
 
 const server = new McpServer({
@@ -330,6 +331,45 @@ server.registerTool(
       structuredContent: { results: result.results },
       content: [
         { type: "text", text: `Applied ${result.success_count}/${result.results.length} category update(s).` },
+      ],
+      _meta: {},
+    };
+  }
+);
+
+// -----------------------------------------------------------------------------
+// Tools: Balances
+// -----------------------------------------------------------------------------
+
+const check_balance_schema = z.object({
+  account: account_enum,
+});
+
+server.registerTool(
+  "check_balance",
+  {
+    title: "check account balance",
+    description:
+      "Returns the current ledger balance of the requested account. Use this to verify balances after adding transactions or when the user asks about an account balance.",
+    inputSchema: check_balance_schema,
+  },
+  async (args: Record<string, unknown>) => {
+    console.log("[MCP] check_balance", new Date().toISOString(), JSON.stringify(args));
+
+    const parsed = check_balance_schema.parse(args);
+    const result = await check_balance(parsed.account);
+
+    if (!result.success) {
+      return {
+        content: [{ type: "text", text: `Failed: ${result.error}` }],
+        isError: true,
+      };
+    }
+
+    return {
+      structuredContent: { account: result.account, balance: result.balance },
+      content: [
+        { type: "text", text: `${result.account} balance: $${result.balance}` },
       ],
       _meta: {},
     };

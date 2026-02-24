@@ -85,6 +85,7 @@ export type parsed_action =
       action: "update_transaction_categories_batch";
       args: { updates: Array<{ expense_id: string; category: string }> };
     }
+  | { action: "check_balance"; args: { account: account_type } }
   | { action: "unknown"; reason?: string | undefined };
 
 // -----------------------------------------------------------------------------
@@ -176,6 +177,10 @@ Change category of one transaction by ID.
 Batch categorize multiple transactions.
 \`{"action":"update_transaction_categories_batch","args":{"updates":[{"expense_id":string,"category":string}]}}\`
 
+## 9. check_balance
+Check the current ledger balance of an account.
+\`{"action":"check_balance","args":{"account":"sapphire"|"checkings"|...}}\`
+
 # CATEGORY INFERENCE (for expenses)
 lunch|dinner|restaurant|eating out -> "out"
 groceries|costco|trader joes|safeway|walmart -> "groceries"
@@ -227,6 +232,7 @@ You can ONLY choose between these actions:
 - "get_categories": when you need to know the valid expense categories. Returns the list of categories from the database.
 - "update_transaction_category": when the user wants to change the category of a specific transaction by ID.
 - "update_transaction_categories_batch": when given a list of transactions with IDs to categorize.
+- "check_balance": when the user asks about the current balance of an account (e.g., "what's my sapphire balance?", "how much do I owe on freedom?").
 
 JSON schema:
 
@@ -272,6 +278,9 @@ update_transaction_category:
 
 update_transaction_categories_batch:
 { "action": "update_transaction_categories_batch", "args": { "updates": [{ "expense_id": string, "category": string }] } }
+
+check_balance:
+{ "action": "check_balance", "args": { "account": one of [${accounts_list}] } }
 
 RULES:
 - JSON ONLY. No markdown, no explanations.
@@ -470,6 +479,16 @@ export async function infer_action(
         return {
           action: "update_transaction_category",
           args: { expense_id: a.expense_id, category: a.category },
+        };
+      }
+    }
+
+    if (parsed.action === "check_balance" && parsed.args) {
+      const a = parsed.args as Record<string, unknown>;
+      if (typeof a.account === "string" && ACCOUNTS.includes(a.account as account_type)) {
+        return {
+          action: "check_balance",
+          args: { account: a.account as account_type },
         };
       }
     }

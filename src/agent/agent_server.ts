@@ -14,6 +14,7 @@ import {
   call_get_categories_tool,
   call_update_transaction_category_tool,
   call_update_transaction_categories_batch_tool,
+  call_check_balance_tool,
 } from "./mcp_client";
 import { REQUEST_BODY_LIMIT } from "../mcp/constants";
 
@@ -82,6 +83,10 @@ app.post("/chat", async (req: Request, res: Response) => {
 
       case "update_transaction_categories_batch":
         mcp_result = await call_update_transaction_categories_batch_tool(action.args as unknown as Parameters<typeof call_update_transaction_categories_batch_tool>[0]);
+        break;
+
+      case "check_balance":
+        mcp_result = await call_check_balance_tool(action.args as unknown as Parameters<typeof call_check_balance_tool>[0]);
         break;
 
       default:
