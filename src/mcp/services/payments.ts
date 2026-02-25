@@ -153,7 +153,7 @@ export async function get_uncleared_expenses(
       const owed =
         typeof owed_formula === "number" ? owed_formula : amount - existing_paid;
 
-      total_owed += owed;
+      total_owed = Math.round((total_owed + owed) * 100) / 100;
 
       return {
         expense_id: page.id,
@@ -384,7 +384,7 @@ export async function create_payment(
           note: expense_note,
         });
         expense_ids_to_link.push(page.id);
-        remaining -= owed_amount;
+        remaining = Math.round((remaining - owed_amount) * 100) / 100;
 
         await notion.pages.update({
           page_id: page.id,
@@ -396,7 +396,7 @@ export async function create_payment(
         });
       } else {
         // Partial payment - apply remaining and stop
-        const new_paid_amount = existing_paid + remaining;
+        const new_paid_amount = Math.round((existing_paid + remaining) * 100) / 100;
 
         cleared_expenses.push({
           expense_id: page.id,

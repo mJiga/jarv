@@ -4,7 +4,8 @@
 
 import "dotenv/config";
 import express, { Request, Response } from "express";
-import { infer_action } from "./llm/gemini_client";
+import rateLimit from "express-rate-limit";
+import { infer_action, parsed_action } from "./llm/gemini_client";
 import {
   call_add_transaction_batch_tool,
   call_add_transaction_tool,
@@ -15,16 +16,27 @@ import {
   call_update_transaction_category_tool,
   call_update_transaction_categories_batch_tool,
   call_check_balance_tool,
+  call_get_uncleared_expenses_tool,
 } from "./mcp_client";
 import { REQUEST_BODY_LIMIT } from "../mcp/constants";
 
 const PORT = Number(process.env.AGENT_PORT ?? 4000);
 
-// Loose type to allow dynamic action handling
-type any_action = { action: string; args?: Record<string, unknown> };
-
 const app = express();
 app.use(express.json({ limit: REQUEST_BODY_LIMIT }));
+app.use(rateLimit({ windowMs: 60_000, max: 30 }));
+
+// Auth middleware — skip if API_SECRET not set (dev mode)
+const API_SECRET = process.env.API_SECRET;
+if (API_SECRET) {
+  app.use((req, res, next) => {
+    const auth = req.headers["authorization"];
+    if (auth !== `Bearer ${API_SECRET}`) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    next();
+  });
+}
 
 /**
  * POST /chat
@@ -39,7 +51,7 @@ app.post("/chat", async (req: Request, res: Response) => {
 
     console.log("[Agent] User message:", message);
 
-    const action = (await infer_action(message)) as any_action;
+    const action = await infer_action(message);
     console.log("[Agent] Parsed action:", action);
 
     if (!action?.action || action.action === "unknown") {
@@ -54,19 +66,19 @@ app.post("/chat", async (req: Request, res: Response) => {
     // Route to appropriate MCP tool
     switch (action.action) {
       case "add_transaction":
-        mcp_result = await call_add_transaction_tool(action.args as unknown as Parameters<typeof call_add_transaction_tool>[0]);
+        mcp_result = await call_add_transaction_tool(action.args);
         break;
 
       case "add_transaction_batch":
-        mcp_result = await call_add_transaction_batch_tool(action.args as unknown as Parameters<typeof call_add_transaction_batch_tool>[0]);
+        mcp_result = await call_add_transaction_batch_tool(action.args);
         break;
 
       case "set_budget_rule":
-        mcp_result = await call_set_budget_rule_tool(action.args as unknown as Parameters<typeof call_set_budget_rule_tool>[0]);
+        mcp_result = await call_set_budget_rule_tool(action.args);
         break;
 
       case "split_paycheck":
-        mcp_result = await call_split_paycheck_tool(action.args as unknown as Parameters<typeof call_split_paycheck_tool>[0]);
+        mcp_result = await call_split_paycheck_tool(action.args);
         break;
 
       case "get_uncategorized_transactions":
@@ -78,22 +90,28 @@ app.post("/chat", async (req: Request, res: Response) => {
         break;
 
       case "update_transaction_category":
-        mcp_result = await call_update_transaction_category_tool(action.args as unknown as Parameters<typeof call_update_transaction_category_tool>[0]);
+        mcp_result = await call_update_transaction_category_tool(action.args);
         break;
 
       case "update_transaction_categories_batch":
-        mcp_result = await call_update_transaction_categories_batch_tool(action.args as unknown as Parameters<typeof call_update_transaction_categories_batch_tool>[0]);
+        mcp_result = await call_update_transaction_categories_batch_tool(action.args);
         break;
 
       case "check_balance":
-        mcp_result = await call_check_balance_tool(action.args as unknown as Parameters<typeof call_check_balance_tool>[0]);
+        mcp_result = await call_check_balance_tool(action.args);
         break;
 
-      default:
+      case "get_uncleared_expenses":
+        mcp_result = await call_get_uncleared_expenses_tool(action.args);
+        break;
+
+      default: {
+        const _exhaustive: never = action;
         return res.json({
-          reply: `Unhandled action type: ${action.action}`,
-          meta: action,
+          reply: `Unhandled action type: ${(_exhaustive as parsed_action).action}`,
+          meta: _exhaustive,
         });
+      }
     }
 
     return res.json({

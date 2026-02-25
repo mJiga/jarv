@@ -12,7 +12,14 @@
     "agent": "ts-node-dev --respawn src/agent/agent_server.ts",
     "typecheck": "tsc --noEmit"
   },
-  "keywords": ["mcp", "notion", "finance", "gemini", "llm", "agent"],
+  "keywords": [
+    "mcp",
+    "notion",
+    "finance",
+    "gemini",
+    "llm",
+    "agent"
+  ],
   "author": "",
   "license": "MIT",
   "type": "commonjs",
@@ -22,6 +29,7 @@
     "@notionhq/client": "^5.4.0",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.2.1",
     "zod": "^4.1.13"
   },
   "devDependencies": {

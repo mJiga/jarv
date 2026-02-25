@@ -2,7 +2,6 @@
 // Client for calling MCP tools via JSON-RPC.
 // Handles both JSON and SSE (Server-Sent Events) response formats.
 
-import "dotenv/config";
 import crypto from "crypto";
 import type {
   account_type,
@@ -20,15 +19,16 @@ const MCP_BASE_URL = process.env.MCP_BASE_URL ?? "http://localhost:3000";
 export interface add_transaction_args {
   amount: number;
   transaction_type: transaction_type;
-  account?: account_type;
-  category?: string;
-  date?: string;
-  note?: string;
-  funding_account?: funding_account_type;
-  from_account?: funding_account_type;
-  to_account?: credit_card_account_type;
-  pre_breakdown?: number;
-  budget?: string;
+  account?: account_type | undefined;
+  category?: string | undefined;
+  date?: string | undefined;
+  note?: string | undefined;
+  funding_account?: funding_account_type | undefined;
+  from_account?: funding_account_type | undefined;
+  to_account?: credit_card_account_type | undefined;
+  pre_breakdown?: number | undefined;
+  budget?: string | undefined;
+  expense_ids?: string[] | undefined;
 }
 
 export interface add_transaction_batch_args {
@@ -42,9 +42,9 @@ export interface set_budget_rule_args {
 
 export interface split_paycheck_args {
   gross_amount: number;
-  budget_name?: string;
-  date?: string;
-  description?: string;
+  budget_name?: string | undefined;
+  date?: string | undefined;
+  description?: string | undefined;
 }
 
 export interface update_transaction_category_args {
@@ -193,4 +193,13 @@ export async function call_update_transaction_categories_batch_tool(
 
 export async function call_check_balance_tool(args: check_balance_args) {
   return call_mcp_tool("check_balance", args, "Balance retrieved.");
+}
+
+export interface get_uncleared_expenses_args {
+  account: credit_card_account_type;
+  from_account?: funding_account_type | undefined;
+}
+
+export async function call_get_uncleared_expenses_tool(args: get_uncleared_expenses_args) {
+  return call_mcp_tool("get_uncleared_expenses", args, "Retrieved uncleared expenses.");
 }

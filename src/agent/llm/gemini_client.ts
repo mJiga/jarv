@@ -2,7 +2,6 @@
 // Gemini LLM client for parsing natural language into structured actions.
 // Outputs JSON matching MCP tool schemas. LLM-agnostic design allows swapping providers.
 
-import "dotenv/config";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import {
   ACCOUNTS,
@@ -10,19 +9,22 @@ import {
   CREDIT_CARD_ACCOUNTS,
   TRANSACTION_TYPES,
   CATEGORY_FUNDING_MAP,
-  BUDGET_NAMES,
   account_type,
   funding_account_type,
   credit_card_account_type,
   transaction_type,
 } from "../../mcp/constants";
 
-if (!process.env.GEMINI_API_KEY) {
-  throw new Error("GEMINI_API_KEY is not set in .env");
-}
+let _model: ReturnType<GoogleGenerativeAI["getGenerativeModel"]> | null = null;
 
-const gen_ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = gen_ai.getGenerativeModel({ model: "gemini-2.0-flash" });
+function get_model() {
+  if (!_model) {
+    const key = process.env.GEMINI_API_KEY;
+    if (!key) throw new Error("GEMINI_API_KEY is not set in .env");
+    _model = new GoogleGenerativeAI(key).getGenerativeModel({ model: "gemini-2.0-flash" });
+  }
+  return _model;
+}
 
 // -----------------------------------------------------------------------------
 // Action Types
@@ -217,98 +219,6 @@ If unclear, omit category (will default to "other")
 
 # INPUT
 ${user_message}`;
-  // Build budget names from constants
-  const budget_names_list = BUDGET_NAMES.join('", "');
-
-  return `
-You are a finance command parser for my personal expense tracker.
-
-CURRENT DATE: ${today_str}
-YESTERDAY: ${yesterday_str}
-
-VALID ACCOUNTS: ${accounts_list}
-VALID FUNDING ACCOUNTS: ${funding_accounts_list}
-VALID CREDIT CARDS: ${cc_accounts_list}
-
-CATEGORY FUNDING DEFAULTS: ${category_funding_entries}
-(These categories auto-assign funding_account if not specified. Other categories default to checkings.)
-
-Your ONLY job is to read the user's message and output STRICT JSON (no extra text).
-You can ONLY choose between these actions:
-- "add_transaction": when the user wants to add a SINGLE expense, income, OR credit card payment. This is the unified entry point for all transaction types.
-  * For expenses: set transaction_type to "expense"
-  * For income: set transaction_type to "income"
-  * For credit card payments: set transaction_type to "payment" (must mention a credit card name like sapphire/freedom OR say "credit card payment")
-- "add_transaction_batch": when the user wants to add MULTIPLE transactions at once, OR when importing from a statement/image.
-- "set_budget_rule": ONLY when the user wants to CREATE or UPDATE budget allocation percentages.
-- "split_paycheck": ONLY when the user mentions a SPECIFIC EMPLOYER/INCOME SOURCE name. Known budget names: "${budget_names_list}".
-- "get_uncategorized_transactions": when user asks to review/clean up the inbox, see what's in "other", or sort uncategorized transactions.
-- "get_categories": when you need to know the valid expense categories. Returns the list of categories from the database.
-- "update_transaction_category": when the user wants to change the category of a specific transaction by ID.
-- "update_transaction_categories_batch": when given a list of transactions with IDs to categorize.
-- "check_balance": when the user asks about the current balance of an account (e.g., "what's my sapphire balance?", "how much do I owe on freedom?").
-
-JSON schema:
-
-add_transaction:
-{
-  "action": "add_transaction",
-  "args": {
-    "amount": number,
-    "transaction_type": "expense" | "income" | "payment",
-    "account": one of [${accounts_list}] (optional),
-    "category": string (optional),
-    "date": "YYYY-MM-DD" (optional),
-    "note": string (optional),
-    "funding_account": one of [${funding_accounts_list}] (for CC expenses),
-    "from_account": one of [${funding_accounts_list}] (for payments),
-    "to_account": one of [${cc_accounts_list}] (for payments)
-  }
-}
-
-add_transaction_batch:
-{
-  "action": "add_transaction_batch",
-  "args": { "transactions": [/* array of transaction objects */] }
-}
-
-set_budget_rule:
-{
-  "action": "set_budget_rule",
-  "args": { "budget_name": string, "budgets": [{ "account": string, "percentage": number }] }
-}
-
-split_paycheck:
-{
-  "action": "split_paycheck",
-  "args": { "gross_amount": number, "budget_name": string, "date": string, "description": string }
-}
-
-get_uncategorized_transactions / get_categories:
-{ "action": "<action>", "args": {} }
-
-update_transaction_category:
-{ "action": "update_transaction_category", "args": { "expense_id": string, "category": string } }
-
-update_transaction_categories_batch:
-{ "action": "update_transaction_categories_batch", "args": { "updates": [{ "expense_id": string, "category": string }] } }
-
-check_balance:
-{ "action": "check_balance", "args": { "account": one of [${accounts_list}] } }
-
-RULES:
-- JSON ONLY. No markdown, no explanations.
-- "<name> paid <amount>" or "<name> <amount>" -> split_paycheck with budget_name = <name>.
-- "got paid" without employer -> split_paycheck with budget_name = "default".
-- Infer category from context: lunch/dinner -> "out", groceries/costco -> "groceries", uber/lyft -> "lyft", amazon -> "shopping", "paid <person>" -> "zelle".
-- For zelle payments, always set account to "checkings".
-- Only include funding_account for credit card expenses (${cc_accounts_list}).
-- If no date specified, OMIT the date field.
-- ALWAYS capture the full note from user message.
-
-User message:
-${user_message}
-`;
 }
 
 // -----------------------------------------------------------------------------
@@ -340,7 +250,7 @@ export async function infer_action(
 ): Promise<parsed_action> {
   const prompt = build_prompt(user_message);
 
-  const result = await model.generateContent({
+  const result = await get_model().generateContent({
     contents: [{ role: "user", parts: [{ text: prompt }] }],
   });
 

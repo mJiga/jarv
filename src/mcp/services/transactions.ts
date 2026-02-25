@@ -366,36 +366,37 @@ export interface add_transactions_batch_result {
 }
 
 /**
- * Processes multiple transactions sequentially.
+ * Processes multiple transactions concurrently.
  * Each transaction is independent - failures don't block others.
  */
 export async function add_transactions_batch(
   input: add_transactions_batch_input
 ): Promise<add_transactions_batch_result> {
-  const results: batch_transaction_result[] = [];
-
-  for (const [index, tx] of input.transactions.entries()) {
-    try {
-      const tx_result = await add_transaction(tx);
-      results.push({
+  const settled = await Promise.allSettled(
+    input.transactions.map((tx, index) =>
+      add_transaction(tx).then((tx_result) => ({
         index,
         success: tx_result.success,
         transaction_id: tx_result.transaction_id,
         message: tx_result.message,
         error: tx_result.error,
-      });
-    } catch (err: unknown) {
-      const message =
-        err instanceof Error
-          ? err.message
-          : "unknown error while processing batch item.";
-      results.push({
-        index,
-        success: false,
-        error: message,
-      });
+      }))
+    )
+  );
+
+  const results: batch_transaction_result[] = settled.map((outcome, index) => {
+    if (outcome.status === "fulfilled") {
+      return outcome.value;
     }
-  }
+    return {
+      index,
+      success: false,
+      error:
+        outcome.reason instanceof Error
+          ? outcome.reason.message
+          : "unknown error while processing batch item.",
+    };
+  });
 
   const success_count = results.filter((r) => r.success).length;
 

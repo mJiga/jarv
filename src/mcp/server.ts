@@ -2,7 +2,9 @@
 // MCP server exposing finance tools via JSON-RPC over HTTP.
 // Stateless design - each request is independent.
 
+import "dotenv/config";
 import express, { Request, Response } from "express";
+import rateLimit from "express-rate-limit";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
@@ -124,7 +126,6 @@ server.registerTool(
     return {
       structuredContent: structured,
       content: [{ type: "text", text: result.message ?? "Transaction added." }],
-      _meta: {},
     };
   }
 );
@@ -152,7 +153,6 @@ server.registerTool(
           text: `Processed ${result.results.length} transactions in batch. ${result.success_count} succeeded.`,
         },
       ],
-      _meta: {},
     };
   }
 );
@@ -183,7 +183,6 @@ server.registerTool(
 
     return {
       content: [{ type: "text", text: result.message ?? "Budget rule set." }],
-      _meta: {},
     };
   }
 );
@@ -224,7 +223,6 @@ server.registerTool(
           text: `Split $${result.gross_amount} using '${result.budget_name}': ${entries_summary}`,
         },
       ],
-      _meta: {},
     };
   }
 );
@@ -264,7 +262,6 @@ server.registerTool(
     return {
       structuredContent: { expenses },
       content: [{ type: "text", text }],
-      _meta: {},
     };
   }
 );
@@ -284,7 +281,6 @@ server.registerTool(
     return {
       structuredContent: { categories },
       content: [{ type: "text", text: `Available categories: ${categories.join(", ")}` }],
-      _meta: {},
     };
   }
 );
@@ -311,7 +307,6 @@ server.registerTool(
 
     return {
       content: [{ type: "text", text: `Updated expense to "${result.category}".` }],
-      _meta: {},
     };
   }
 );
@@ -334,7 +329,6 @@ server.registerTool(
       content: [
         { type: "text", text: `Applied ${result.success_count}/${result.results.length} category update(s).` },
       ],
-      _meta: {},
     };
   }
 );
@@ -382,7 +376,6 @@ server.registerTool(
     return {
       structuredContent: { expenses, total_owed: result.total_owed },
       content: [{ type: "text", text }],
-      _meta: {},
     };
   }
 );
@@ -421,7 +414,6 @@ server.registerTool(
       content: [
         { type: "text", text: `${result.account} balance: $${result.balance}` },
       ],
-      _meta: {},
     };
   }
 );
@@ -458,6 +450,22 @@ function checkEnvVars(): { missing: string[]; set: string[] } {
 async function main() {
   const app = express();
   app.use(express.json({ limit: REQUEST_BODY_LIMIT }));
+  app.use(rateLimit({ windowMs: 60_000, max: 60 }));
+
+  // Auth middleware — skip if API_SECRET not set (dev mode)
+  const API_SECRET = process.env.API_SECRET;
+  if (API_SECRET) {
+    app.use((req, res, next) => {
+      if (req.method === "GET" && (req.path === "/" || req.path === "/health")) {
+        return next();
+      }
+      const auth = req.headers["authorization"];
+      if (auth !== `Bearer ${API_SECRET}`) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+      next();
+    });
+  }
 
   // Health check endpoint
   app.get("/health", (_req: Request, res: Response) => {

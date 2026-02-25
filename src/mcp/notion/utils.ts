@@ -40,9 +40,9 @@ const data_source_id_cache = new Map<string, cache_entry<string>>();
 /** Account page ID cache — accounts rarely change */
 const account_page_id_cache = new Map<string, cache_entry<string>>();
 
-// Category cache
-let cached_categories: string[] | null = null;
-let cache_timestamp: number = 0;
+/** Category cache — unified with same Map pattern */
+const category_cache = new Map<string, cache_entry<string[]>>();
+const CATEGORY_CACHE_KEY = "categories";
 
 // -----------------------------------------------------------------------------
 // Category Management
@@ -56,8 +56,9 @@ let cache_timestamp: number = 0;
 export async function get_available_categories(): Promise<string[]> {
   const now = Date.now();
 
-  if (cached_categories && now - cache_timestamp < CATEGORY_CACHE_TTL_MS) {
-    return cached_categories;
+  const cached = category_cache.get(CATEGORY_CACHE_KEY);
+  if (cached && now - cached.timestamp < CATEGORY_CACHE_TTL_MS) {
+    return cached.value;
   }
 
   try {
@@ -81,13 +82,13 @@ export async function get_available_categories(): Promise<string[]> {
       categories.push("other");
     }
 
-    cached_categories = categories;
-    cache_timestamp = now;
+    category_cache.set(CATEGORY_CACHE_KEY, { value: categories, timestamp: now });
 
     return categories;
   } catch (err) {
     console.error("Error fetching categories from Notion:", err);
-    return cached_categories ?? [...FALLBACK_CATEGORIES];
+    const fallback = category_cache.get(CATEGORY_CACHE_KEY);
+    return fallback?.value ?? [...FALLBACK_CATEGORIES];
   }
 }
 
